@@ -19,14 +19,15 @@ const WARNING_AUDIO_WAVEFORM  = 'sine';
 
 const WARNING_HAPTIC_PATTERN  = [180];   // Android: navigator.vibrate() 패턴 (ms)
 
-// iPhone: iOS에는 진동 API가 없어 Safari 스위치 컨트롤(<input type="checkbox" switch>)이
-// 토글될 때 나는 시스템 햅틱을 사용한다. 길이·세기는 조절할 수 없고 짧은 '톡' 1회가 기본 단위.
-// 값 = 각 '톡'을 실행할 시점(ms, 경고 시작 기준). [0] = 1회 (가장 안정적인 기본값)
-// 예: [0, 80, 160] = 3회. 바꾸면 연구자 모드의 VH 테스트 버튼으로 실제 기기에서 먼저 확인할 것.
-const WARNING_HAPTIC_IOS_TAPS = [0];
+// iPhone: 웹 브라우저로는 진동을 낼 수 없어, 실험용 앱(Expo Go 안의 MOA 실험 앱)이 진동을 대신 실행한다.
+// 'vibrate' = iOS 기본 진동 (약 0.4초, 길이 고정, 가장 잘 느껴짐)
+// 'heavy'   = 강하고 짧은 탭 1회
+// 'warning' = iOS 경고형 햅틱 (짧은 탭 여러 번)
+// 이 값만 바꿔 GitHub에 올리면 앱을 다시 설치하지 않아도 적용된다.
+const WARNING_HAPTIC_NATIVE_STYLE = 'vibrate';
 
 const HAPTIC_UNSUPPORTED_MESSAGE =
-  '현재 기기에서는 진동 기능을 사용할 수 없습니다. iPhone은 iOS 18 이상의 Safari, Android는 Chrome에서 실행해 주세요.';
+  '현재 기기에서는 진동 기능을 사용할 수 없습니다. iPhone은 실험용 앱(Expo Go)에서, Android는 Chrome에서 실행해 주세요.';
 
 const STORAGE_KEY = 'moaMarketExperiment.v1';
 const REUSE_ASSIGNMENT_FOR_P11_TO_P20 = true; // P11~P20 → P01~P10 배정 반복 (참가자 20명까지)
@@ -149,16 +150,19 @@ const productPrice = p => p.salePrice || p.price;
 const PARAMS = new URLSearchParams(location.search);
 const DEBUG = PARAMS.get('debug') === '1';
 const RESEARCHER = PARAMS.get('researcher') === '1';
-// 앱 시작 시 진동 지원 검사: Android = 'vibrate' in navigator / iPhone = Safari 스위치 햅틱
+// 앱 시작 시 진동 지원 검사
+//   iPhone 실험 앱 안 = 앱이 진동 실행 (window.ReactNativeWebView 존재)
+//   Android Chrome     = 'vibrate' in navigator
+const NATIVE_APP = !!window.ReactNativeWebView;
 const HAPTIC_VIBRATE = 'vibrate' in navigator;
 const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-const IOS_MAJOR = (() => { const m = navigator.userAgent.match(/OS (\d+)_/); return m ? Number(m[1]) : 0; })();
-const IOS_SWITCH_HAPTIC = !HAPTIC_VIBRATE && IS_IOS && IOS_MAJOR >= 18 && ('switch' in document.createElement('input'));
-const HAPTIC_METHOD = HAPTIC_VIBRATE ? 'vibrate' : IOS_SWITCH_HAPTIC ? 'ios-switch' : 'none';
+const HAPTIC_METHOD = NATIVE_APP ? 'native-app' : HAPTIC_VIBRATE ? 'vibrate' : 'none';
 const HAPTIC_SUPPORTED = HAPTIC_METHOD !== 'none';
-const HAPTIC_METHOD_LABEL = { vibrate: 'navigator.vibrate (Android)', 'ios-switch': 'Safari 스위치 햅틱 (iPhone)', none: '미지원' }[HAPTIC_METHOD];
-const CAN_SHARE_FILES = (() => {
+const HAPTIC_METHOD_LABEL = {
+  'native-app': `실험 앱 진동 (${WARNING_HAPTIC_NATIVE_STYLE})`, vibrate: 'navigator.vibrate (Android)', none: '미지원',
+}[HAPTIC_METHOD];
+const CAN_SHARE_FILES = !NATIVE_APP && (() => {
   try { return !!navigator.canShare && navigator.canShare({ files: [new File(['x'], 'test.csv', { type: 'text/csv' })] }); }
   catch (e) { return false; }
 })();
@@ -257,31 +261,40 @@ function playWarningTone() {
 }
 
 /* ─── 8. 경고: 진동 + 공통 경고 실행 함수 ───────────────────────── */
-// iPhone 햅틱용 숨김 스위치. 화면에는 보이지 않고 터치도 받지 않는다.
-let iosHapticLabel = null;
-function setupIosHaptic() {
-  if (HAPTIC_METHOD !== 'ios-switch' || iosHapticLabel) return;
-  const label = document.createElement('label');
-  label.className = 'ios-haptic';
-  label.setAttribute('aria-hidden', 'true');
-  const input = document.createElement('input');
-  input.type = 'checkbox';
-  input.setAttribute('switch', '');
-  input.tabIndex = -1;
-  label.appendChild(input);
-  document.body.appendChild(label);
-  iosHapticLabel = label;
+// iPhone 실험 앱과의 연결: 웹 → 앱 메시지로 진동 요청, 앱 → 웹으로 실행 확인(ack)
+const nativePending = {};       // 요청 id → 보낸 시각
+let testHapticId = null;        // 연구자 모드 테스트 버튼의 요청 id
+function postToApp(payload) {
+  window.ReactNativeWebView.postMessage(JSON.stringify(payload));
 }
-function iosHapticTap() {
-  setupIosHaptic();
-  if (iosHapticLabel) iosHapticLabel.click();   // 스위치 토글 → iOS 시스템 햅틱
+function requestNativeHaptic() {
+  const id = 'h' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  nativePending[id] = performance.now();
+  postToApp({ type: 'haptic', style: WARNING_HAPTIC_NATIVE_STYLE, id });
+  return id;
 }
-// 반드시 사용자 터치 처리 흐름 안에서(동기적으로) 호출되어야 iOS가 햅틱을 허용한다.
-// 모든 의사결정 화면은 참가자의 버튼 터치로 열리므로 이 조건을 만족한다.
-function playIosHaptic() {
-  WARNING_HAPTIC_IOS_TAPS.forEach(ms => (ms <= 0 ? iosHapticTap() : setTimeout(iosHapticTap, ms)));
-  return true;
-}
+// 앱이 호출하는 함수: window.__moaNative({ type, ... })
+window.__moaNative = msg => {
+  if (!msg || typeof msg !== 'object') return;
+  if (msg.type === 'hapticAck') {
+    const sentAt = nativePending[msg.id];
+    const latency = sentAt != null ? Math.round(performance.now() - sentAt) : null;
+    delete nativePending[msg.id];
+    if (T && T.decision && T.decision.hapticRequestId === msg.id) {
+      T.decision.hapticTriggered = !!msg.ok;
+      T.decision.hapticAckLatencyMs = latency;
+      T.decision.hapticError = msg.ok ? '' : (msg.error || 'app_error');
+      logEvent('haptic_ack', { ok: !!msg.ok, latencyMs: latency, style: msg.style });
+    }
+    if (msg.id === testHapticId) {
+      const el = document.getElementById('testResult');
+      if (el) el.textContent += ` · 앱 진동 실행 ${msg.ok ? `확인 (${latency}ms)` : '실패: ' + (msg.error || '')}`;
+    }
+    debugUpdate();
+  } else if (msg.type === 'exportDone') {
+    showToast(msg.ok ? '공유 화면을 열었습니다.' : '내보내기 실패: ' + (msg.error || ''));
+  }
+};
 
 const WARNING_HTML =
   `<div class="warning-box" role="alert"><span class="warning-icon" aria-hidden="true">⚠</span>` +
@@ -312,9 +325,9 @@ function triggerWarning(condition) {
       try { r.hapticTriggered = navigator.vibrate(WARNING_HAPTIC_PATTERN) === true; }
       catch (e) { r.hapticError = String(e); }
       if (!r.hapticTriggered && !r.hapticError) r.hapticError = 'vibrate_returned_false';
-    } else if (HAPTIC_METHOD === 'ios-switch') {
-      // iOS는 햅틱이 실제로 울렸는지 알려 주지 않으므로 '실행 요청 성공' 여부를 기록
-      try { r.hapticTriggered = playIosHaptic(); }
+    } else if (HAPTIC_METHOD === 'native-app') {
+      // 앱에 진동 요청. hapticTriggered는 앱이 실행 확인(ack)을 보내오면 1이 된다 (보통 수십 ms 이내)
+      try { r.hapticRequestId = requestNativeHaptic(); r.hapticError = 'awaiting_app_ack'; }
       catch (e) { r.hapticError = String(e); }
     } else {
       r.hapticError = 'unsupported';
@@ -435,7 +448,8 @@ function finishTask(outcome) {
     hapticSupported: HAPTIC_SUPPORTED ? 1 : 0,
     hapticMethod: HAPTIC_METHOD,
     hapticTriggered: d.hapticTriggered ? 1 : 0,
-    hapticError: d.hapticError || '',
+    hapticError: d.hapticError === 'awaiting_app_ack' ? 'no_app_ack' : (d.hapticError || ''),
+    hapticAckLatencyMs: d.hapticAckLatencyMs ?? '',
     optionChanged: '', optionChangeTime: '', optionToggleCount: '', finalOptionSelected: '',
     paidAmount: '', finalCancellationCompleted: '', finalChoice: '', budsSelected: '', orderItems: '',
     t0Ms: round1(d.t0), t1Ms: round1(d.t1),
@@ -1125,6 +1139,7 @@ function actTestWarning({ cond }) {
   ensureAudio();
   showModal({ title: `경고 테스트: ${cond}`, body: '<div class="warning-slot" id="warningSlot"></div><p id="testResult"></p>', actions: [{ label: '닫기', primary: true }] });
   const r = triggerWarning(cond);
+  testHapticId = r.hapticRequestId || null;
   document.getElementById('testResult').textContent =
     `시각 ${r.visualShown ? 'O' : '-'} · 소리 ${r.audioTriggered ? 'O' : '-'} (${r.audioState}) · 진동 ${r.hapticTriggered ? 'O' : '-'}${r.hapticError ? ` (${r.hapticError})` : ''}`;
 }
@@ -1201,7 +1216,7 @@ function debugUpdate() {
 const CSV_COLUMNS = [
   'participantId', 'sessionMode', 'status', 'taskOrder', 'taskId', 'taskType', 'condition',
   'choice', 'resistance', 'responseTimeMs', 'responseTimeSec', 'taskSuccess',
-  'visualShown', 'audioTriggered', 'audioContextState', 'hapticSupported', 'hapticMethod', 'hapticTriggered', 'hapticError',
+  'visualShown', 'audioTriggered', 'audioContextState', 'hapticSupported', 'hapticMethod', 'hapticTriggered', 'hapticAckLatencyMs', 'hapticError',
   'optionChanged', 'optionChangeTime', 'optionToggleCount', 'finalOptionSelected', 'paidAmount',
   'finalCancellationCompleted', 'finalChoice', 'budsSelected', 'orderItems',
   'recognitionYesNo', 'recognitionText', 'attempts',
@@ -1241,6 +1256,8 @@ function toCSV(rows) {
   return [CSV_COLUMNS.join(','), ...rows.map(r => CSV_COLUMNS.map(c => csvCell(r[c])).join(','))].join('\r\n');
 }
 function download(name, text, type) {
+  // iPhone 실험 앱 안: 앱이 파일을 만들어 공유 화면(AirDrop·메일·파일 앱)을 연다
+  if (NATIVE_APP) { postToApp({ type: 'export', filename: name, mime: type.split(';')[0], content: text }); return; }
   const blob = new Blob([text], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1301,8 +1318,8 @@ function renderResearcher() {
   appEl.innerHTML = `<main class="researcher">
     <header class="r-head"><h1>연구자 모드</h1><p>참가자 ${parts.length}명 · 완료된 과제 기록 ${rows.filter(r => r.status === 'completed').length}건 · 저장 위치: 이 기기 브라우저(localStorage)</p></header>
     <section class="r-actions">
-      <button class="btn btn-primary" data-act="rCsv">CSV 다운로드</button>
-      <button class="btn btn-secondary" data-act="rJson">JSON 백업 다운로드</button>
+      <button class="btn btn-primary" data-act="rCsv">CSV 다운로드${NATIVE_APP ? ' (공유)' : ''}</button>
+      <button class="btn btn-secondary" data-act="rJson">JSON 백업 다운로드${NATIVE_APP ? ' (공유)' : ''}</button>
       <label class="btn btn-secondary file-btn">JSON 불러오기<input type="file" accept="application/json,.json" id="importFile" hidden></label>
       ${CAN_SHARE_FILES ? '<button class="btn btn-secondary" data-act="rShareCsv">CSV 공유 (AirDrop·메일)</button>' : ''}
       <button class="btn btn-secondary" data-act="rRefresh">새로고침</button>
@@ -1311,8 +1328,9 @@ function renderResearcher() {
     <section class="r-card r-device"><h2>기기 점검</h2>
       <p>진동 방식: <b>${HAPTIC_SUPPORTED ? HAPTIC_METHOD_LABEL : '미지원 — ' + esc(HAPTIC_UNSUPPORTED_MESSAGE)}</b></p>
       <p>경고음: ${WARNING_AUDIO_WAVEFORM} ${WARNING_AUDIO_FREQUENCY}Hz · ${WARNING_AUDIO_DURATION}ms · gain ${WARNING_AUDIO_GAIN} /
-        진동: ${HAPTIC_METHOD === 'ios-switch' ? `iPhone 햅틱 ${WARNING_HAPTIC_IOS_TAPS.length}회 [${WARNING_HAPTIC_IOS_TAPS.join(', ')}]ms` : `패턴 [${WARNING_HAPTIC_PATTERN.join(', ')}]`}</p>
-      ${IS_IOS ? '<p class="r-meta">iPhone 확인: 설정 › 사운드 및 햅틱 › 시스템 햅틱 켜기 · 저전력 모드 끄기 · 미디어 볼륨 올리기</p>' : ''}
+        진동: ${HAPTIC_METHOD === 'native-app' ? `앱 진동 '${WARNING_HAPTIC_NATIVE_STYLE}'` : `패턴 [${WARNING_HAPTIC_PATTERN.join(', ')}]`}</p>
+      ${IS_IOS ? '<p class="r-meta">iPhone 확인: 설정 › 손쉬운 사용 › 터치 › 진동 켜기 · 사운드 및 햅틱 › 햅틱 “항상 재생” · 무음 모드 해제 · 미디어 볼륨 올리기 · 저전력 모드 끄기</p>' : ''}
+      ${IS_IOS && !NATIVE_APP ? '<p class="r-meta"><b>지금은 Safari에서 열려 있어 진동 테스트가 되지 않습니다. 실험 앱(Expo Go) 안에서 열어 주세요.</b></p>' : ''}
       <div class="r-test">${CONDITIONS.map(c => `<button class="btn btn-secondary" data-act="testWarning" data-cond="${c}">${c} 테스트</button>`).join('')}</div>
     </section>
     <section class="r-card"><h2>조건별 요약</h2>${summaryTable(rows, 'condition', CONDITIONS)}</section>
@@ -1443,8 +1461,7 @@ function actLogoTap() {
 }
 
 function init() {
-  if (RESEARCHER) { document.body.classList.add('is-researcher'); renderResearcher(); setupIosHaptic(); return; }
-  setupIosHaptic();
+  if (RESEARCHER) { document.body.classList.add('is-researcher'); renderResearcher(); return; }
   setupBackTrap();
   if (DEBUG) {
     document.body.classList.add('is-debug');

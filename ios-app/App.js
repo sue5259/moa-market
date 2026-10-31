@@ -1,0 +1,178 @@
+/**
+ * MOA 실험 앱 (iPhone · Expo Go)
+ *
+ * GitHub Pages의 실험 페이지를 앱 화면 전체로 열고,
+ * 페이지가 보내는 신호를 받아 iPhone의 실제 진동을 실행한다.
+ *   웹 → 앱  { type: 'haptic', style, id }               진동 요청
+ *   앱 → 웹  { type: 'hapticAck', id, ok, error, style }  진동 실행 확인 (데이터에 기록됨)
+ *   웹 → 앱  { type: 'export', filename, mime, content } CSV/JSON 공유 화면 열기
+ */
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, Share, StyleSheet, Text, Vibration, View } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import { WebView } from 'react-native-webview';
+import * as Haptics from 'expo-haptics';
+import { useKeepAwake } from 'expo-keep-awake';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
+import * as ExpoAudio from 'expo-audio';
+
+// 실험 페이지 주소 (GitHub Pages)
+const APP_URL = 'https://sue5259.github.io/moa-market/';
+const ALLOWED_HOST = 'sue5259.github.io';
+const BG = '#F3F4F6';
+
+// 페이지가 열리기 전에 "앱 안에서 실행 중"임을 알려 줌
+const INJECT_BEFORE_LOAD = `window.MOA_NATIVE_APP = { platform: 'ios', shell: 'expo-go', version: 1 }; true;`;
+
+// 진동 실행
+//   vibrate : iOS 기본 진동 (약 0.4초, 길이 고정 — iOS는 길이 지정을 지원하지 않음)
+//   heavy   : 강하고 짧은 탭
+//   warning : iOS 경고형 햅틱
+async function runHaptic(style) {
+  if (style === 'heavy') return Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+  if (style === 'warning') return Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+  Vibration.vibrate();
+}
+
+// 공유용 임시 파일 만들기 (Expo SDK 버전에 따라 파일 API가 달라 둘 다 지원)
+async function writeTempFile(filename, content) {
+  if (FileSystem.File && FileSystem.Paths) {
+    const file = new FileSystem.File(FileSystem.Paths.cache, filename);
+    if (file.exists) file.delete();
+    file.create();
+    file.write(content);
+    return file.uri;
+  }
+  const uri = FileSystem.cacheDirectory + filename;
+  await FileSystem.writeAsStringAsync(uri, content);
+  return uri;
+}
+
+function Shell() {
+  useKeepAwake();                       // 실험 중 화면 꺼짐 방지
+  const webRef = useRef(null);
+  const [failed, setFailed] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // 옆면 무음 스위치가 켜져 있어도 경고음이 나도록 오디오 모드 설정
+  useEffect(() => {
+    try {
+      const p = ExpoAudio.setAudioModeAsync && ExpoAudio.setAudioModeAsync({ playsInSilentMode: true });
+      if (p && p.catch) p.catch(() => {});
+    } catch (e) { /* 지원하지 않으면 무시 */ }
+  }, []);
+
+  const reply = useCallback(payload => {
+    if (!webRef.current) return;
+    webRef.current.injectJavaScript(`window.__moaNative && window.__moaNative(${JSON.stringify(payload)}); true;`);
+  }, []);
+
+  const onMessage = useCallback(async event => {
+    let msg;
+    try { msg = JSON.parse(event.nativeEvent.data); } catch (e) { return; }
+    if (!msg || typeof msg !== 'object') return;
+
+    if (msg.type === 'haptic') {
+      let ok = true, error = '';
+      try { await runHaptic(msg.style); }
+      catch (e) { ok = false; error = String((e && e.message) || e); }
+      reply({ type: 'hapticAck', id: msg.id, ok, error, style: msg.style || 'vibrate' });
+      return;
+    }
+
+    if (msg.type === 'export') {
+      const isJson = /\.json$/i.test(msg.filename || '');
+      try {
+        const uri = await writeTempFile(msg.filename, msg.content);
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(uri, {
+            mimeType: msg.mime || (isJson ? 'application/json' : 'text/csv'),
+            UTI: isJson ? 'public.json' : 'public.comma-separated-values-text',
+            dialogTitle: msg.filename,
+          });
+        } else {
+          await Share.share({ title: msg.filename, message: msg.content });
+        }
+        reply({ type: 'exportDone', ok: true, filename: msg.filename });
+      } catch (e) {
+        // 파일 공유가 안 되면 내용 자체를 텍스트로 공유 (메일·메모에 붙여넣기 가능)
+        try {
+          await Share.share({ title: msg.filename, message: msg.content });
+          reply({ type: 'exportDone', ok: true, filename: msg.filename, fallback: 'text' });
+        } catch (e2) {
+          reply({ type: 'exportDone', ok: false, error: String((e2 && e2.message) || e2) });
+        }
+      }
+    }
+  }, [reply]);
+
+  // 실험 페이지 밖으로 나가는 링크 차단
+  const onShouldStart = useCallback(req => {
+    const url = req.url || '';
+    return url.startsWith('about:') || url.includes(ALLOWED_HOST);
+  }, []);
+
+  if (failed) {
+    return (
+      <SafeAreaView style={styles.center}>
+        <Text style={styles.errTitle}>실험 페이지를 불러오지 못했습니다</Text>
+        <Text style={styles.errText}>인터넷 연결을 확인한 뒤 다시 시도해 주세요.</Text>
+        <Pressable style={styles.retry} onPress={() => { setFailed(false); setReloadKey(k => k + 1); }}>
+          <Text style={styles.retryText}>다시 시도</Text>
+        </Pressable>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
+      <StatusBar style="dark" />
+      <WebView
+        key={reloadKey}
+        ref={webRef}
+        source={{ uri: APP_URL }}
+        injectedJavaScriptBeforeContentLoaded={INJECT_BEFORE_LOAD}
+        onMessage={onMessage}
+        onShouldStartLoadWithRequest={onShouldStart}
+        javaScriptEnabled
+        domStorageEnabled
+        mediaPlaybackRequiresUserAction={false}
+        allowsInlineMediaPlayback
+        allowsBackForwardNavigationGestures={false}
+        allowsLinkPreview={false}
+        bounces={false}
+        dataDetectorTypes="none"
+        contentInsetAdjustmentBehavior="never"
+        automaticallyAdjustContentInsets={false}
+        startInLoadingState
+        renderLoading={() => (
+          <View style={styles.loading}><ActivityIndicator size="large" color="#0F6B5C" /></View>
+        )}
+        onError={() => setFailed(true)}
+        onHttpError={e => { if (e.nativeEvent.statusCode >= 400) setFailed(true); }}
+        style={styles.web}
+      />
+    </SafeAreaView>
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <Shell />
+    </SafeAreaProvider>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: BG },
+  web: { flex: 1, backgroundColor: BG },
+  loading: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: BG },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: BG },
+  errTitle: { fontSize: 22, fontWeight: '800', color: '#16191D', textAlign: 'center' },
+  errText: { fontSize: 18, color: '#434A53', marginTop: 8, textAlign: 'center' },
+  retry: { marginTop: 24, minHeight: 56, paddingHorizontal: 32, borderRadius: 12, backgroundColor: '#0F6B5C', justifyContent: 'center' },
+  retryText: { color: '#fff', fontSize: 19, fontWeight: '700' },
+});

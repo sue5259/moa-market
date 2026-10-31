@@ -15,41 +15,29 @@
 ## 진동 방식 (자동 선택)
 | 기기 | 방식 | 비고 |
 |---|---|---|
-| iPhone (iOS 18 이상 Safari) | Safari 스위치 컨트롤 시스템 햅틱 | 짧은 '톡' 1회. 길이·세기 조절 불가 |
+| iPhone | 실험 앱(Expo Go) 안에서 열기 → 앱이 iOS 진동 실행 | `ios-app/README.md` 참고. 기본 'vibrate' (약 0.4초, 길이 고정) |
 | Android Chrome | `navigator.vibrate([180])` | 180ms 진동 |
-| 그 외 (iOS 17 이하 등) | 미지원 | 시작 시 연구자 경고, 실험 시작 차단 |
+| iPhone Safari 등 그 외 | 미지원 | 시작 시 연구자 경고, 실험 시작 차단 |
 
-CSV의 `hapticMethod` 열에 어떤 방식이 쓰였는지 기록됩니다. iPhone은 햅틱이 실제로 울렸는지 브라우저가 알려 주지 않으므로 `hapticTriggered=1`은 "햅틱 실행 요청이 정상 처리됨"을 뜻합니다.
+CSV `hapticMethod` 열에 방식(`native-app` / `vibrate`)이 기록됩니다. iPhone 앱에서는 앱이 진동 실행을 확인해 돌려줘야
+`hapticTriggered=1`이 되고, `hapticAckLatencyMs`에 요청→확인 시간이 남습니다.
 
 ## 설정값 (app.js 상단)
 `WARNING_AUDIO_FREQUENCY`(880) · `WARNING_AUDIO_DURATION`(180ms) · `WARNING_AUDIO_GAIN`(0.12) ·
-`WARNING_HAPTIC_PATTERN`([180], Android) · `WARNING_HAPTIC_IOS_TAPS`([0] = 1회, iPhone) ·
+`WARNING_HAPTIC_PATTERN`([180], Android) · `WARNING_HAPTIC_NATIVE_STYLE`('vibrate', iPhone 앱) ·
 `ASSIGNMENT_TABLE`(P01~P10) · `TASK_TEXT`(과제 문구)
 
 ## iPhone에서 실행
-1. 세 파일을 HTTPS 정적 호스팅(GitHub Pages 등)에 올리고 iPhone **Safari**로 접속
-   (같은 Wi-Fi에서 노트북 `python3 -m http.server 8000` 후 `http://<노트북IP>:8000/` 접속도 가능)
-2. iPhone 설정
-   - 설정 › 사운드 및 햅틱 › **시스템 햅틱 켜기** (꺼져 있으면 진동 조건에서 아무 느낌이 없음)
-   - **저전력 모드 끄기**
-   - 화면 표시 및 밝기 › 자동 잠금 → **안 함**
-   - 미디어 볼륨을 적당히 올리기 (무음 스위치는 앱이 우회하도록 설정했지만, 실험 전 테스트로 꼭 확인)
-   - 알림이 뜨지 않게 **방해 금지 모드** 켜기
-3. `?researcher=1` → 기기 점검의 VA / VH / VAH 테스트 버튼으로 소리·햅틱 확인
-4. 참가자 시작은 `index.html` (debug 없이)
-
-**선택: 홈 화면에 추가** — Safari 공유 버튼 › 홈 화면에 추가 → 주소창 없이 앱처럼 열림.
-주의: 홈 화면 앱과 Safari 탭은 저장 공간이 **서로 분리**됩니다. 실험과 데이터 다운로드를 같은 쪽에서 해야 하며,
-홈 화면 앱에서는 로고 5번 터치로 연구자 모드에 들어갑니다. 이 방식으로 진행할 경우 햅틱이 동작하는지 먼저 테스트하세요.
+`ios-app/README.md`의 순서를 따르세요 (노트북에서 Expo 실행 → iPhone Expo Go로 QR).
+앱 안에는 주소창이 없으므로 시작 화면 **로고를 3초 안에 5번** 눌러 연구자 모드에 들어갑니다.
 
 ## 데이터 옮기기
-데이터는 **그 iPhone의 그 브라우저**에만 저장됩니다. 세션이 끝날 때마다 연구자 모드에서:
-- **CSV 공유 (AirDrop·메일)** → 노트북으로 바로 보내기
-- 또는 **CSV 다운로드** / **JSON 백업 다운로드** → 파일 앱에 저장
+데이터는 **실험한 기기의 그 앱/브라우저 안**에만 저장됩니다. 세션이 끝날 때마다 연구자 모드에서
+**CSV 다운로드** / **JSON 백업 다운로드** (iPhone 앱에서는 공유 화면 → AirDrop·메일·파일 앱).
 
 ## 주요 저장 열 (CSV)
 participantId, taskOrder, taskId, taskType, condition, choice, resistance, responseTimeMs, responseTimeSec, taskSuccess,
-visualShown, audioTriggered, hapticSupported, hapticMethod, hapticTriggered, optionChanged, optionChangeTime(T0 기준 ms),
+visualShown, audioTriggered, hapticSupported, hapticMethod, hapticTriggered, hapticAckLatencyMs, optionChanged, optionChangeTime(T0 기준 ms),
 finalCancellationCompleted, recognitionYesNo, recognitionText, attempts, t0Ms, t1Ms, timestamp, userAgent, screenWidth, screenHeight, events(JSON)
 
 taskSuccess 정의: N=Daily Tumbler로 구매 준비 도달, O=최종 해지 완료, S=29,000원 이내 결제, I·F=구매 완료.

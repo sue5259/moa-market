@@ -41,8 +41,6 @@ body {
 button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; touch-action: manipulation; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 a.btn { text-decoration: none; color: inherit; }
-/* iPhone 햅틱용 숨김 스위치 (보이지 않고 터치도 받지 않음) */
-.ios-haptic { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; overflow: hidden; opacity: 0.01; pointer-events: none; }
 h1, h2, h3, p { margin: 0; }
 ul { margin: 0; padding: 0; list-style: none; }
 

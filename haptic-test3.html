@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>진동 진단 3</title>
+<style>
+  :root { --brand: #0F6B5C; --muted: #5F6873; --bg: #F3F4F6; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: #16191D; font: 18px/1.55 system-ui, -apple-system, "Apple SD Gothic Neo", sans-serif; word-break: keep-all; }
+  /* 오른쪽 80px은 숨김 스위치 자리 → 본문과 절대 겹치지 않음 */
+  main { max-width: 480px; margin: 0 auto; padding: 20px 88px 60px 16px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 0 0 4px; }
+  .card { background: #fff; border: 1px solid #E4E7EB; border-radius: 14px; padding: 16px; margin-top: 14px; }
+  .muted { color: var(--muted); font-size: 16px; }
+  button.t { display: block; width: 100%; min-height: 58px; margin-top: 10px; border: 0; border-radius: 12px;
+    background: var(--brand); color: #fff; font: inherit; font-weight: 700; touch-action: manipulation; }
+  .count { font-size: 15px; color: var(--muted); margin-top: 6px; }
+
+  /* 숨김 스위치: 오른쪽 가장자리, 서로 다른 높이 (겹치지 않음), 정상 크기 */
+  .hs { position: fixed; right: 12px; margin: 0; display: block; line-height: 0; }
+  .hs input { margin: 0; }
+  #K1 { top: 90px;  z-index: 1; }   /* 덮개(터치 통과) 아래 */
+  #K2 { top: 170px; opacity: 0.01; }
+  #K3 { top: 250px; opacity: 0; }
+  #K4 { top: 330px; pointer-events: none; }   /* 보이지만 터치 차단 (가설 확인용) */
+  #K5 { top: 410px; }                          /* 그냥 보이는 스위치 (확인용) */
+  .cover { position: fixed; right: 0; top: 80px; width: 80px; height: 56px; background: var(--bg); z-index: 2; pointer-events: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>진동 진단 3</h1>
+  <p class="muted">버튼을 하나씩 누르고 '톡' 느낌이 있었는지 확인해 주세요. 결과를 1~5번별 O/X로 알려 주세요.</p>
+  <p class="muted">화면 오른쪽 끝에 스위치 일부가 보일 수 있습니다. 그쪽은 누르지 말고 초록 버튼만 눌러 주세요.</p>
+
+  <section class="card"><h2>1. 덮개 아래 스위치</h2><p class="muted">배경색 판으로 가렸지만 터치는 통과</p>
+    <button class="t" data-test="K1">1번 테스트</button><div class="count" id="cK1"></div></section>
+  <section class="card"><h2>2. 투명도 1%</h2><p class="muted">다른 것에 가려지지 않음</p>
+    <button class="t" data-test="K2">2번 테스트</button><div class="count" id="cK2"></div></section>
+  <section class="card"><h2>3. 투명도 0</h2>
+    <button class="t" data-test="K3">3번 테스트</button><div class="count" id="cK3"></div></section>
+  <section class="card"><h2>4. 보이지만 터치 차단</h2><p class="muted">오른쪽 끝에 보이는 스위치 (확인용)</p>
+    <button class="t" data-test="K4">4번 테스트</button><div class="count" id="cK4"></div></section>
+  <section class="card"><h2>5. 그냥 보이는 스위치</h2><p class="muted">오른쪽 끝에 보이는 스위치 (확인용, 되어야 정상)</p>
+    <button class="t" data-test="K5">5번 테스트</button><div class="count" id="cK5"></div></section>
+</main>
+
+<div class="cover" aria-hidden="true"></div>
+<label class="hs" id="K1" aria-hidden="true"><input type="checkbox" switch tabindex="-1"></label>
+<label class="hs" id="K2" aria-hidden="true"><input type="checkbox" switch tabindex="-1"></label>
+<label class="hs" id="K3" aria-hidden="true"><input type="checkbox" switch tabindex="-1"></label>
+<label class="hs" id="K4" aria-hidden="true"><input type="checkbox" switch tabindex="-1"></label>
+<label class="hs" id="K5" aria-hidden="true"><input type="checkbox" switch tabindex="-1"></label>
+
+<script>
+  const counts = {};
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-test]');
+    if (!b) return;
+    const k = b.dataset.test;
+    document.getElementById(k).click();
+    counts[k] = (counts[k] || 0) + 1;
+    document.getElementById('c' + k).textContent = `실행 ${counts[k]}회`;
+  });
+</script>
+</body>
+</html>

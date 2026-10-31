@@ -12,10 +12,23 @@
 /* ─── 1. 실험 설정값 (여기서만 바꾸면 됩니다) ───────────────────────── */
 const WARNING_TEXT = '선택하기 전에 화면의 정보를 다시 확인해 주세요.';
 
-const WARNING_AUDIO_FREQUENCY = 880;     // Hz
+const WARNING_AUDIO_FREQUENCY = 880;     // Hz   ('single' 소리에 사용)
 const WARNING_AUDIO_DURATION  = 180;     // ms
 const WARNING_AUDIO_GAIN      = 0.12;    // 0 ~ 1
 const WARNING_AUDIO_WAVEFORM  = 'sine';
+
+// 경고음 후보 (CSV audioPreset 열에 실제 사용된 소리가 기록됨)
+// beeps: [주파수 Hz, 길이 ms] 목록, gap: 소리 사이 간격 ms
+const WARNING_AUDIO_PRESETS = {
+  single:  { label: '삐 (1회, 처음 버전)', wave: WARNING_AUDIO_WAVEFORM, gain: WARNING_AUDIO_GAIN,
+             beeps: [[WARNING_AUDIO_FREQUENCY, WARNING_AUDIO_DURATION]], gap: 0 },
+  double:  { label: '삐삐 (2회)', wave: 'triangle', gain: 0.18, beeps: [[1000, 120], [1000, 120]], gap: 70 },
+  triple:  { label: '삐삐삐 (3회, 빠르게)', wave: 'square', gain: 0.05, beeps: [[1050, 80], [1050, 80], [1050, 80]], gap: 55 },
+  twoTone: { label: '삐-뽀 (높낮이 경고음)', wave: 'triangle', gain: 0.18, beeps: [[1175, 150], [880, 190]], gap: 30 },
+  alarm:   { label: '삐뽀삐뽀 (빠른 경보음)', wave: 'square', gain: 0.05, beeps: [[1320, 95], [990, 95], [1320, 95], [990, 95]], gap: 0 },
+};
+// ▼ 실험에 사용할 경고음 (모든 참가자·VA·VAH 조건에 동일하게 적용)
+const WARNING_AUDIO_PRESET = 'double';
 
 const WARNING_HAPTIC_PATTERN  = [180];   // Android: navigator.vibrate() 패턴 (ms)
 
@@ -235,25 +248,31 @@ function ensureAudio() {
   }
 }
 
-function playWarningTone() {
+// 한 의사결정 화면당 한 번 호출 (여러 번 '삐'가 나는 소리도 하나의 경고음으로 재생)
+function playWarningTone(presetKey = WARNING_AUDIO_PRESET) {
   if (!audioCtx) ensureAudio();
-  if (!audioCtx) return { played: false, state: 'unsupported' };
+  if (!audioCtx) return { played: false, state: 'unsupported', preset: presetKey };
   try {
     if (audioCtx.state !== 'running') audioCtx.resume();
-    const t = audioCtx.currentTime;
-    const dur = WARNING_AUDIO_DURATION / 1000;
+    const p = WARNING_AUDIO_PRESETS[presetKey] || WARNING_AUDIO_PRESETS.single;
+    const t0 = audioCtx.currentTime + 0.005;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
-    osc.type = WARNING_AUDIO_WAVEFORM;
-    osc.frequency.setValueAtTime(WARNING_AUDIO_FREQUENCY, t);
-    // 클릭 잡음 방지를 위한 아주 짧은 페이드 인/아웃(10ms)
-    gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(WARNING_AUDIO_GAIN, t + 0.01);
-    gain.gain.setValueAtTime(WARNING_AUDIO_GAIN, t + Math.max(0.011, dur - 0.01));
-    gain.gain.linearRampToValueAtTime(0, t + dur);
+    osc.type = p.wave;
+    gain.gain.setValueAtTime(0, t0);
+    let t = t0;
+    p.beeps.forEach(([freq, ms], i) => {
+      const dur = ms / 1000, ramp = 0.008;     // 클릭 잡음 방지용 짧은 페이드
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(p.gain, t + ramp);
+      gain.gain.setValueAtTime(p.gain, t + Math.max(ramp + 0.001, dur - ramp));
+      gain.gain.linearRampToValueAtTime(0, t + dur);
+      t += dur + (i < p.beeps.length - 1 ? p.gap / 1000 : 0);
+    });
     osc.connect(gain); gain.connect(audioCtx.destination);
-    osc.start(t); osc.stop(t + dur + 0.02);
-    return { played: audioCtx.state === 'running', state: audioCtx.state };
+    osc.start(t0); osc.stop(t + 0.02);
+    return { played: audioCtx.state === 'running', state: audioCtx.state, preset: presetKey };
   } catch (e) {
     console.error('[MOA] 경고음 재생 오류', e);
     return { played: false, state: 'error' };
@@ -318,7 +337,7 @@ function triggerWarning(condition) {
   }
   if (spec.audio) {
     const a = playWarningTone();
-    r.audioTriggered = a.played; r.audioState = a.state;
+    r.audioTriggered = a.played; r.audioState = a.state; r.audioPreset = a.preset;
   }
   if (spec.haptic) {
     if (HAPTIC_METHOD === 'vibrate') {
@@ -444,6 +463,7 @@ function finishTask(outcome) {
     taskSuccess: outcome.taskSuccess,
     visualShown: d.visualShown ? 1 : 0,
     audioTriggered: d.audioTriggered ? 1 : 0,
+    audioPreset: d.audioPreset || '',
     audioContextState: d.audioState || '',
     hapticSupported: HAPTIC_SUPPORTED ? 1 : 0,
     hapticMethod: HAPTIC_METHOD,
@@ -1216,7 +1236,7 @@ function debugUpdate() {
 const CSV_COLUMNS = [
   'participantId', 'sessionMode', 'status', 'taskOrder', 'taskId', 'taskType', 'condition',
   'choice', 'resistance', 'responseTimeMs', 'responseTimeSec', 'taskSuccess',
-  'visualShown', 'audioTriggered', 'audioContextState', 'hapticSupported', 'hapticMethod', 'hapticTriggered', 'hapticAckLatencyMs', 'hapticError',
+  'visualShown', 'audioTriggered', 'audioPreset', 'audioContextState', 'hapticSupported', 'hapticMethod', 'hapticTriggered', 'hapticAckLatencyMs', 'hapticError',
   'optionChanged', 'optionChangeTime', 'optionToggleCount', 'finalOptionSelected', 'paidAmount',
   'finalCancellationCompleted', 'finalChoice', 'budsSelected', 'orderItems',
   'recognitionYesNo', 'recognitionText', 'attempts',
@@ -1327,7 +1347,7 @@ function renderResearcher() {
     </section>
     <section class="r-card r-device"><h2>기기 점검</h2>
       <p>진동 방식: <b>${HAPTIC_SUPPORTED ? HAPTIC_METHOD_LABEL : '미지원 — ' + esc(HAPTIC_UNSUPPORTED_MESSAGE)}</b></p>
-      <p>경고음: ${WARNING_AUDIO_WAVEFORM} ${WARNING_AUDIO_FREQUENCY}Hz · ${WARNING_AUDIO_DURATION}ms · gain ${WARNING_AUDIO_GAIN} /
+      <p>경고음: ${WARNING_AUDIO_PRESETS[WARNING_AUDIO_PRESET].label} /
         진동: ${HAPTIC_METHOD === 'native-app' ? `앱 진동 '${WARNING_HAPTIC_NATIVE_STYLE}'` : `패턴 [${WARNING_HAPTIC_PATTERN.join(', ')}]`}</p>
       ${IS_IOS ? '<p class="r-meta">iPhone 확인: 설정 › 손쉬운 사용 › 터치 › 진동 켜기 · 사운드 및 햅틱 › 햅틱 “항상 재생” · 무음 모드 해제 · 미디어 볼륨 올리기 · 저전력 모드 끄기</p>' : ''}
       ${IS_IOS && !NATIVE_APP ? '<p class="r-meta"><b>지금은 Safari에서 열려 있어 진동 테스트가 되지 않습니다. 실험 앱(Expo Go) 안에서 열어 주세요.</b></p>' : ''}

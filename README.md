@@ -23,7 +23,7 @@ CSV `hapticMethod` 열에 방식(`native-app` / `vibrate`)이 기록됩니다. i
 `hapticTriggered=1`이 되고, `hapticAckLatencyMs`에 요청→확인 시간이 남습니다.
 
 ## 설정값 (app.js 상단)
-`WARNING_AUDIO_FREQUENCY`(880) · `WARNING_AUDIO_DURATION`(180ms) · `WARNING_AUDIO_GAIN`(0.12) ·
+`WARNING_AUDIO_PRESET`('double' = 삐삐: 1000Hz 삼각파 120ms × 2회, 간격 70ms, gain 0.18) ·
 `WARNING_HAPTIC_PATTERN`([180], Android) · `WARNING_HAPTIC_NATIVE_STYLE`('vibrate', iPhone 앱) ·
 `ASSIGNMENT_TABLE`(P01~P10) · `TASK_TEXT`(과제 문구)
 
@@ -37,7 +37,7 @@ CSV `hapticMethod` 열에 방식(`native-app` / `vibrate`)이 기록됩니다. i
 
 ## 주요 저장 열 (CSV)
 participantId, taskOrder, taskId, taskType, condition, choice, resistance, responseTimeMs, responseTimeSec, taskSuccess,
-visualShown, audioTriggered, hapticSupported, hapticMethod, hapticTriggered, hapticAckLatencyMs, optionChanged, optionChangeTime(T0 기준 ms),
+visualShown, audioTriggered, audioPreset, hapticSupported, hapticMethod, hapticTriggered, hapticAckLatencyMs, optionChanged, optionChangeTime(T0 기준 ms),
 finalCancellationCompleted, recognitionYesNo, recognitionText, attempts, t0Ms, t1Ms, timestamp, userAgent, screenWidth, screenHeight, events(JSON)
 
 taskSuccess 정의: N=Daily Tumbler로 구매 준비 도달, O=최종 해지 완료, S=29,000원 이내 결제, I·F=구매 완료.

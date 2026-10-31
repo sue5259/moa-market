@@ -1,0 +1,1456 @@
+'use strict';
+/* =====================================================================
+   MOA Market — 실험용 모바일 웹 프로토타입
+   연구: 시각 기반 멀티모달 경고가 고령자의 다크패턴 인지와 저항 행동에 미치는 영향
+
+   URL 모드
+     index.html               참가자 모드 (디버그 정보 없음)
+     index.html?debug=1       개발자 테스트 모드 (현재 Task·Condition·T0·T1 패널 표시)
+     index.html?researcher=1  연구자 데이터 화면 (CSV/JSON 다운로드, 삭제)
+   ===================================================================== */
+
+/* ─── 1. 실험 설정값 (여기서만 바꾸면 됩니다) ───────────────────────── */
+const WARNING_TEXT = '선택하기 전에 화면의 정보를 다시 확인해 주세요.';
+
+const WARNING_AUDIO_FREQUENCY = 880;     // Hz
+const WARNING_AUDIO_DURATION  = 180;     // ms
+const WARNING_AUDIO_GAIN      = 0.12;    // 0 ~ 1
+const WARNING_AUDIO_WAVEFORM  = 'sine';
+
+const WARNING_HAPTIC_PATTERN  = [180];   // Android: navigator.vibrate() 패턴 (ms)
+
+// iPhone: iOS에는 진동 API가 없어 Safari 스위치 컨트롤(<input type="checkbox" switch>)이
+// 토글될 때 나는 시스템 햅틱을 사용한다. 길이·세기는 조절할 수 없고 짧은 '톡' 1회가 기본 단위.
+// 값 = 각 '톡'을 실행할 시점(ms, 경고 시작 기준). [0] = 1회 (가장 안정적인 기본값)
+// 예: [0, 80, 160] = 3회. 바꾸면 연구자 모드의 VH 테스트 버튼으로 실제 기기에서 먼저 확인할 것.
+const WARNING_HAPTIC_IOS_TAPS = [0];
+
+const HAPTIC_UNSUPPORTED_MESSAGE =
+  '현재 기기에서는 진동 기능을 사용할 수 없습니다. iPhone은 iOS 18 이상의 Safari, Android는 Chrome에서 실행해 주세요.';
+
+const STORAGE_KEY = 'moaMarketExperiment.v1';
+const REUSE_ASSIGNMENT_FOR_P11_TO_P20 = true; // P11~P20 → P01~P10 배정 반복 (참가자 20명까지)
+const REQUEST_FULLSCREEN_ON_START = true;     // 모바일에서 시작 시 전체화면(주소창 숨김)
+const DOUBLE_TAP_GUARD_MS = 300;              // 화면 전환 직후 중복 터치 무시
+
+const PRICE = { tumbler: 29000, addon: 2900, budget: 29000, plusDiscount: 5000, shareDiscount: 5000 };
+
+/* ─── 2. 실험 조건 · 과제 정의 ─────────────────────────────────────── */
+const CONDITION_SPEC = {
+  NW:  { visual: false, audio: false, haptic: false, label: 'No Warning' },
+  V:   { visual: true,  audio: false, haptic: false, label: 'Visual' },
+  VA:  { visual: true,  audio: true,  haptic: false, label: 'Visual + Audio' },
+  VH:  { visual: true,  audio: false, haptic: true,  label: 'Visual + Haptic' },
+  VAH: { visual: true,  audio: true,  haptic: true,  label: 'Visual + Audio + Haptic' },
+};
+const CONDITIONS = Object.keys(CONDITION_SPEC);
+
+const TASK_TYPES = { N: 'Nagging', O: 'Obstruction', S: 'Sneaking', I: 'Interface Interference', F: 'Forced Action' };
+const TASK_IDS = Object.keys(TASK_TYPES);
+
+// 참가자에게 보이는 과제 문구 (다크패턴이라는 표현 없음)
+const TASK_TEXT = {
+  N: { instruction: 'Daily Tumbler를 찾아 장바구니에 담고 구매 준비 화면까지 진행해 주세요.' },
+  O: { instruction: '현재 이용 중인 MOA Plus 멤버십 이용을 종료해 주세요.' },
+  S: { instruction: '29,000원 예산으로 Daily Tumbler 1개를 구매해 주세요.' },
+  I: { instruction: '추가 멤버십을 이용하지 않는 상황이라고 가정하고 Daily Tumbler 구매를 완료해 주세요.',
+       note: '지금 다른 멤버십 서비스를 이미 이용하고 있는 상황입니다.' },
+  F: { instruction: '상품 구매를 원하는 방식으로 완료해 주세요.',
+       note: '장바구니에 Daily Tumbler 1개가 담겨 있습니다.' },
+};
+
+// 각 과제에서 경고·T0가 발생하는 핵심 의사결정 화면
+const DECISION_SCREEN = { N: 'nagSecond', O: 'retention', S: 'checkout', I: 'plusOffer', F: 'shareOffer' };
+
+// 선택값 → 저항(1) / 순응(0)
+const CHOICE_RESISTANCE = {
+  N: { view_discount: 0, continue_shopping: 1 },
+  O: { keep_benefits: 0, cancel_anyway: 1 },     // O는 최종 해지 완료까지 해야 1
+  S: { pay_with_option: 0, pay_without_option: 1 },
+  I: { start_plus_trial: 0, continue_regular: 1 },
+  F: { share_for_discount: 0, buy_without_discount: 1 },
+};
+
+/* ─── 3. 사전 균형 배정표 ─────────────────────────────────────────── */
+const ASSIGNMENT_TABLE = {
+  P01: 'N-NW  O-V   S-VA  I-VH  F-VAH',
+  P02: 'O-VA  S-VH  I-VAH F-NW  N-V',
+  P03: 'S-VAH I-NW  F-V   N-VA  O-VH',
+  P04: 'I-V   F-VA  N-VH  O-VAH S-NW',
+  P05: 'F-VH  N-VAH O-NW  S-V   I-VA',
+  P06: 'F-VAH I-VH  S-VA  O-V   N-NW',
+  P07: 'N-V   F-NW  I-VAH S-VH  O-VA',
+  P08: 'O-VH  N-VA  F-V   I-NW  S-VAH',
+  P09: 'S-NW  O-VAH N-VH  F-VA  I-V',
+  P10: 'I-VA  S-V   O-NW  N-VAH F-VH',
+};
+const ASSIGNMENTS = {};
+for (const [pid, line] of Object.entries(ASSIGNMENT_TABLE)) {
+  ASSIGNMENTS[pid] = line.trim().split(/\s+/).map(tok => {
+    const [taskId, condition] = tok.split('-');
+    return { taskId, condition };
+  });
+}
+if (REUSE_ASSIGNMENT_FOR_P11_TO_P20) {
+  for (let i = 11; i <= 20; i++) ASSIGNMENTS['P' + i] = ASSIGNMENTS['P' + String(i - 10).padStart(2, '0')];
+}
+
+function normalizeId(raw) {
+  const m = String(raw || '').trim().toUpperCase().replace(/\s+/g, '').match(/^P?0*(\d{1,2})$/);
+  if (!m) return null;
+  const id = 'P' + String(Number(m[1])).padStart(2, '0');
+  return ASSIGNMENTS[id] ? id : null;
+}
+
+function validateAssignments() {
+  const participants = Object.keys(ASSIGNMENT_TABLE).map(pid => {
+    const a = ASSIGNMENTS[pid];
+    const issues = [];
+    const ts = new Set(a.map(x => x.taskId));
+    const cs = new Set(a.map(x => x.condition));
+    if (a.length !== 5) issues.push('과제 수가 5개가 아님');
+    if (ts.size !== 5 || !TASK_IDS.every(t => ts.has(t))) issues.push('과제 중복/누락');
+    if (cs.size !== 5 || !CONDITIONS.every(c => cs.has(c))) issues.push('조건 중복/누락');
+    return { pid, sequence: a.map(x => `${x.taskId}-${x.condition}`).join('  '), ok: issues.length === 0, issues };
+  });
+  for (let i = 1; i <= 5; i++) {
+    const a = ASSIGNMENTS['P0' + i], bId = 'P' + String(i + 5).padStart(2, '0'), b = ASSIGNMENTS[bId];
+    const rev = a.map(x => x.taskId + x.condition).reverse().join(',');
+    if (rev !== b.map(x => x.taskId + x.condition).join(',')) {
+      const r = participants.find(p => p.pid === bId);
+      r.ok = false; r.issues.push(`P0${i}의 역순이 아님`);
+    }
+  }
+  const combos = {};
+  const positions = {};
+  for (const pid of Object.keys(ASSIGNMENT_TABLE)) {
+    ASSIGNMENTS[pid].forEach((x, i) => {
+      combos[`${x.taskId}-${x.condition}`] = (combos[`${x.taskId}-${x.condition}`] || 0) + 1;
+      positions[`${x.condition}@${i + 1}`] = (positions[`${x.condition}@${i + 1}`] || 0) + 1;
+    });
+  }
+  return { allOk: participants.every(p => p.ok), participants, combos, positions };
+}
+
+/* ─── 4. 상품 데이터 ─────────────────────────────────────────────── */
+const PRODUCTS = {
+  tumbler: { id: 'tumbler', name: 'Daily Tumbler', desc: '보온·보냉 스테인리스 텀블러 473ml', price: 29000, available: true, art: 'tumbler',
+    body: '이중 진공 구조로 따뜻한 음료는 따뜻하게, 차가운 음료는 차갑게 오래 유지됩니다. 뚜껑을 돌려 잠그는 방식이라 가방에 넣어도 새지 않습니다.' },
+  buds: { id: 'buds', name: 'MOA Buds', desc: '무선 블루투스 이어폰', price: 89000, salePrice: 62300, sale: 30, available: true, art: 'buds',
+    body: '가볍고 귀에 편안하게 맞는 무선 이어폰입니다. 한 번 충전으로 최대 6시간 사용할 수 있습니다.' },
+  mug: { id: 'mug', name: 'Stone Mug', desc: '도자기 머그컵 350ml', price: 15900, available: false, art: 'mug', body: '두툼한 도자기 머그컵입니다.' },
+  towel: { id: 'towel', name: 'Soft Towel 2매', desc: '면 100% 세면 타월', price: 12900, available: false, art: 'towel', body: '부드러운 면 타월 2장 묶음입니다.' },
+  tote: { id: 'tote', name: 'Canvas Tote Bag', desc: '두꺼운 면 캔버스 가방', price: 19800, available: false, art: 'tote', body: '튼튼한 캔버스 가방입니다.' },
+  notebook: { id: 'notebook', name: 'Grid Notebook', desc: '모눈 노트 A5', price: 6500, available: false, art: 'notebook', body: '모눈 노트입니다.' },
+};
+const productPrice = p => p.salePrice || p.price;
+
+/* ─── 5. 환경 · 유틸 ─────────────────────────────────────────────── */
+const PARAMS = new URLSearchParams(location.search);
+const DEBUG = PARAMS.get('debug') === '1';
+const RESEARCHER = PARAMS.get('researcher') === '1';
+// 앱 시작 시 진동 지원 검사: Android = 'vibrate' in navigator / iPhone = Safari 스위치 햅틱
+const HAPTIC_VIBRATE = 'vibrate' in navigator;
+const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const IOS_MAJOR = (() => { const m = navigator.userAgent.match(/OS (\d+)_/); return m ? Number(m[1]) : 0; })();
+const IOS_SWITCH_HAPTIC = !HAPTIC_VIBRATE && IS_IOS && IOS_MAJOR >= 18 && ('switch' in document.createElement('input'));
+const HAPTIC_METHOD = HAPTIC_VIBRATE ? 'vibrate' : IOS_SWITCH_HAPTIC ? 'ios-switch' : 'none';
+const HAPTIC_SUPPORTED = HAPTIC_METHOD !== 'none';
+const HAPTIC_METHOD_LABEL = { vibrate: 'navigator.vibrate (Android)', 'ios-switch': 'Safari 스위치 햅틱 (iPhone)', none: '미지원' }[HAPTIC_METHOD];
+const CAN_SHARE_FILES = (() => {
+  try { return !!navigator.canShare && navigator.canShare({ files: [new File(['x'], 'test.csv', { type: 'text/csv' })] }); }
+  catch (e) { return false; }
+})();
+
+const iso = () => new Date().toISOString();
+const won = n => Number(n).toLocaleString('ko-KR') + '원';
+const round1 = n => (typeof n === 'number' ? Math.round(n * 10) / 10 : '');
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function stamp() {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
+}
+function deviceInfo() {
+  return {
+    userAgent: navigator.userAgent,
+    screenWidth: screen.width, screenHeight: screen.height,
+    viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio,
+    hapticSupported: HAPTIC_SUPPORTED,
+    hapticMethod: HAPTIC_METHOD,
+    isIOS: IS_IOS,
+  };
+}
+
+/* ─── 6. 저장소 (localStorage) ──────────────────────────────────── */
+function loadStore() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const d = JSON.parse(raw);
+      if (d && typeof d.participants === 'object') return d;
+    }
+  } catch (e) { console.error('[MOA] 저장 데이터 읽기 실패', e); }
+  return { version: 1, participants: {} };
+}
+const store = loadStore();
+function saveStore() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+    return true;
+  } catch (e) {
+    console.error('[MOA] 저장 실패', e);
+    alert('데이터 저장에 실패했습니다. 연구자에게 알려 주세요.');
+    return false;
+  }
+}
+
+/* ─── 7. 경고: 청각 (Web Audio API) ─────────────────────────────── */
+let audioCtx = null;
+
+// [실험 시작] 등 사용자 터치 순간에 호출 → AudioContext 생성/resume (autoplay 제한 대응)
+function ensureAudio() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return 'unsupported';
+    // iPhone: 'playback' 오디오 세션은 옆면 무음 스위치가 켜져 있어도 소리를 냄 (Safari 16.4+)
+    try { if (navigator.audioSession && navigator.audioSession.type !== 'playback') navigator.audioSession.type = 'playback'; } catch (e) { /* 미지원 */ }
+    if (!audioCtx) audioCtx = new AC();
+    if (audioCtx.state !== 'running') audioCtx.resume();   // suspended / interrupted(iOS) 모두 재개
+    // 무음 버퍼를 한 번 재생해 오디오 출력 잠금 해제
+    const buf = audioCtx.createBuffer(1, 1, 22050);
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf; src.connect(audioCtx.destination); src.start(0);
+    return audioCtx.state;
+  } catch (e) {
+    console.error('[MOA] AudioContext 오류', e);
+    return 'error';
+  }
+}
+
+function playWarningTone() {
+  if (!audioCtx) ensureAudio();
+  if (!audioCtx) return { played: false, state: 'unsupported' };
+  try {
+    if (audioCtx.state !== 'running') audioCtx.resume();
+    const t = audioCtx.currentTime;
+    const dur = WARNING_AUDIO_DURATION / 1000;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = WARNING_AUDIO_WAVEFORM;
+    osc.frequency.setValueAtTime(WARNING_AUDIO_FREQUENCY, t);
+    // 클릭 잡음 방지를 위한 아주 짧은 페이드 인/아웃(10ms)
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(WARNING_AUDIO_GAIN, t + 0.01);
+    gain.gain.setValueAtTime(WARNING_AUDIO_GAIN, t + Math.max(0.011, dur - 0.01));
+    gain.gain.linearRampToValueAtTime(0, t + dur);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(t); osc.stop(t + dur + 0.02);
+    return { played: audioCtx.state === 'running', state: audioCtx.state };
+  } catch (e) {
+    console.error('[MOA] 경고음 재생 오류', e);
+    return { played: false, state: 'error' };
+  }
+}
+
+/* ─── 8. 경고: 진동 + 공통 경고 실행 함수 ───────────────────────── */
+// iPhone 햅틱용 숨김 스위치. 화면에는 보이지 않고 터치도 받지 않는다.
+let iosHapticLabel = null;
+function setupIosHaptic() {
+  if (HAPTIC_METHOD !== 'ios-switch' || iosHapticLabel) return;
+  const label = document.createElement('label');
+  label.className = 'ios-haptic';
+  label.setAttribute('aria-hidden', 'true');
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.setAttribute('switch', '');
+  input.tabIndex = -1;
+  label.appendChild(input);
+  document.body.appendChild(label);
+  iosHapticLabel = label;
+}
+function iosHapticTap() {
+  setupIosHaptic();
+  if (iosHapticLabel) iosHapticLabel.click();   // 스위치 토글 → iOS 시스템 햅틱
+}
+// 반드시 사용자 터치 처리 흐름 안에서(동기적으로) 호출되어야 iOS가 햅틱을 허용한다.
+// 모든 의사결정 화면은 참가자의 버튼 터치로 열리므로 이 조건을 만족한다.
+function playIosHaptic() {
+  WARNING_HAPTIC_IOS_TAPS.forEach(ms => (ms <= 0 ? iosHapticTap() : setTimeout(iosHapticTap, ms)));
+  return true;
+}
+
+const WARNING_HTML =
+  `<div class="warning-box" role="alert"><span class="warning-icon" aria-hidden="true">⚠</span>` +
+  `<span class="warning-text">${WARNING_TEXT}</span></div>`;
+
+/**
+ * 모든 조건을 처리하는 단일 경고 함수.
+ * NW → 없음 / V → 시각 / VA → 시각+청각 / VH → 시각+진동 / VAH → 시각+청각+진동
+ * 시각 경고는 화면의 #warningSlot(높이 고정)에 채워 넣는다.
+ */
+function triggerWarning(condition) {
+  const spec = CONDITION_SPEC[condition];
+  const r = {
+    condition, visualShown: false, audioTriggered: false, audioState: audioCtx ? audioCtx.state : 'none',
+    hapticSupported: HAPTIC_SUPPORTED, hapticMethod: HAPTIC_METHOD, hapticTriggered: false, hapticError: '',
+  };
+  if (!spec) return r;
+  if (spec.visual) {
+    const slot = document.getElementById('warningSlot');
+    if (slot) { slot.innerHTML = WARNING_HTML; r.visualShown = true; }
+  }
+  if (spec.audio) {
+    const a = playWarningTone();
+    r.audioTriggered = a.played; r.audioState = a.state;
+  }
+  if (spec.haptic) {
+    if (HAPTIC_METHOD === 'vibrate') {
+      try { r.hapticTriggered = navigator.vibrate(WARNING_HAPTIC_PATTERN) === true; }
+      catch (e) { r.hapticError = String(e); }
+      if (!r.hapticTriggered && !r.hapticError) r.hapticError = 'vibrate_returned_false';
+    } else if (HAPTIC_METHOD === 'ios-switch') {
+      // iOS는 햅틱이 실제로 울렸는지 알려 주지 않으므로 '실행 요청 성공' 여부를 기록
+      try { r.hapticTriggered = playIosHaptic(); }
+      catch (e) { r.hapticError = String(e); }
+    } else {
+      r.hapticError = 'unsupported';
+      console.warn('[MOA] ' + HAPTIC_UNSUPPORTED_MESSAGE);
+    }
+  }
+  return r;
+}
+
+/* ─── 9. 앱 상태 · 라우터 ───────────────────────────────────────── */
+let session = null;            // 현재 참가자 기록 (store.participants[id])
+let T = null;                  // 현재 과제의 런타임 상태 (과제마다 새로 생성 → 과제 간 독립)
+let view = { name: 'start', params: {} };
+let navStack = [];
+let lastRenderAt = 0;
+let startDraft = '', startError = '';
+let recogDraft = { yes: null, text: '' };
+let lastSavedRow = null;
+let wakeLock = null;
+
+const appEl = document.getElementById('app');
+
+const PUSHABLE = new Set(['home', 'list', 'detail', 'cart', 'checkout', 'my', 'plus', 'plusManage']);
+const BACKABLE = new Set(['list', 'detail', 'cart', 'checkout', 'my', 'plus', 'plusManage']);
+
+function canGoBack() {
+  return !!T && !T.finished && BACKABLE.has(view.name) && !(view.name === 'checkout' && T.taskId === 'S');
+}
+function go(name, params = {}, opts = {}) {
+  const push = opts.push !== false;
+  if (push && PUSHABLE.has(view.name)) navStack.push(view);
+  view = { name, params };
+  if (T) logEvent('view', { to: name, id: params.id || undefined });
+  render();
+}
+function goBack() {
+  view = navStack.pop() || { name: 'home', params: {} };
+  if (T) logEvent('back', { to: view.name });
+  render();
+}
+function render(opts = {}) {
+  const fn = SCREENS[view.name];
+  appEl.innerHTML = fn ? fn(view.params || {}) : '';
+  if (!opts.keepScroll) window.scrollTo(0, 0);
+  lastRenderAt = performance.now();
+  afterRender();
+  debugUpdate();
+}
+
+// 의사결정 화면이 DOM에 들어간 바로 그 순간: T0 기록 + 경고 실행 (모든 조건 동일 기준)
+function afterRender() {
+  if (T && !T.finished && view.name === DECISION_SCREEN[T.taskId] && !T.decision) beginDecision();
+}
+function beginDecision() {
+  const t0 = performance.now();
+  const w = triggerWarning(T.condition);
+  T.decision = { screen: view.name, t0, shownAt: iso(), t1: null, madeAt: null, choice: null, responseTimeMs: null, ...w };
+  logEvent('decision_screen_shown', {
+    condition: T.condition, visualShown: w.visualShown, audioTriggered: w.audioTriggered,
+    hapticTriggered: w.hapticTriggered, hapticError: w.hapticError || undefined,
+  });
+  if (DEBUG) console.info('[MOA] T0', T.taskId, T.condition, t0.toFixed(1), w);
+}
+function recordDecision(choice) {
+  if (!T || !T.decision || T.decision.t1 != null) return false;   // 중복 기록 방지
+  const t1 = performance.now();
+  Object.assign(T.decision, {
+    t1, madeAt: iso(), choice, responseTimeMs: Math.round(t1 - T.decision.t0),
+  });
+  logEvent('decision_made', { choice, responseTimeMs: T.decision.responseTimeMs });
+  if (DEBUG) console.info('[MOA] T1', choice, t1.toFixed(1), 'RT', T.decision.responseTimeMs, 'ms');
+  debugUpdate();
+  return true;
+}
+
+function newTaskState(taskId, condition, order) {
+  return {
+    taskId, condition, order, startedAt: iso(), startPerf: performance.now(),
+    cart: taskId === 'F' ? [{ id: 'tumbler' }] : [],
+    member: taskId === 'O',
+    orderItems: [],
+    nag1Shown: false, nag1Open: false, nagIntent: null,
+    addon: true, addonToggleCount: 0, optionFirstChangeMs: null,
+    plusTrial: false, shared: false,
+    decision: null, finished: false, events: [],
+  };
+}
+function logEvent(type, data = {}) {
+  if (!T) return;
+  const now = performance.now();
+  T.events.push({
+    type, tMs: Math.round(now - T.startPerf),
+    sinceT0Ms: T.decision ? Math.round(now - T.decision.t0) : null,
+    screen: view.name, ...data,
+  });
+}
+
+/* 과제 결과 저장 */
+function finishTask(outcome) {
+  if (!T || T.finished) return;
+  const d = T.decision || {};
+  const dev = session.device || deviceInfo();
+  const row = {
+    participantId: session.participantId,
+    sessionMode: session.mode,
+    taskOrder: T.order,
+    taskId: T.taskId,
+    taskType: TASK_TYPES[T.taskId],
+    condition: T.condition,
+    choice: d.choice ?? '',
+    resistance: outcome.resistance,
+    responseTimeMs: d.responseTimeMs ?? '',
+    responseTimeSec: d.responseTimeMs != null ? Math.round(d.responseTimeMs) / 1000 : '',
+    taskSuccess: outcome.taskSuccess,
+    visualShown: d.visualShown ? 1 : 0,
+    audioTriggered: d.audioTriggered ? 1 : 0,
+    audioContextState: d.audioState || '',
+    hapticSupported: HAPTIC_SUPPORTED ? 1 : 0,
+    hapticMethod: HAPTIC_METHOD,
+    hapticTriggered: d.hapticTriggered ? 1 : 0,
+    hapticError: d.hapticError || '',
+    optionChanged: '', optionChangeTime: '', optionToggleCount: '', finalOptionSelected: '',
+    paidAmount: '', finalCancellationCompleted: '', finalChoice: '', budsSelected: '', orderItems: '',
+    t0Ms: round1(d.t0), t1Ms: round1(d.t1),
+    decisionShownAt: d.shownAt || '', decisionMadeAt: d.madeAt || '',
+    taskStartedAt: T.startedAt,
+    timestamp: iso(),
+    userAgent: dev.userAgent, screenWidth: dev.screenWidth, screenHeight: dev.screenHeight,
+    ...(outcome.extra || {}),
+  };
+  T.finished = true;
+  logEvent('task_finished', { resistance: row.resistance, taskSuccess: row.taskSuccess });
+  row.events = T.events;
+  session.results[T.taskId] = row;
+  session.currentIndex = T.order;            // 다음 과제 인덱스
+  if (session.currentIndex >= session.assignment.length) { session.phase = 'recognition'; session.recogIndex = 0; }
+  session.updatedAt = iso();
+  saveStore();
+  lastSavedRow = row;
+  console.info('[MOA] 과제 결과 저장', row.participantId, row.taskOrder, row.taskId);
+  if (DEBUG) console.table([{ ...row, events: `${row.events.length} events` }]);
+  debugUpdate();
+}
+function endTaskView() {
+  T = null; navStack = [];
+  go('taskDone', {}, { push: false });
+}
+
+/* ─── 10. 아이콘 · 일러스트 ─────────────────────────────────────── */
+const ICON_PATHS = {
+  home: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/>',
+  grid: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
+  cart: '<path d="M3 4h2l2.4 11h11L21 7H6.2"/><circle cx="9.5" cy="19" r="1.6"/><circle cx="17.5" cy="19" r="1.6"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+};
+const icon = (name, sw = 2) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
+
+const ART = {
+  tumbler: '<rect width="120" height="120" rx="18" fill="#E3F1EE"/><rect x="43" y="19" width="34" height="11" rx="4" fill="#24313B"/><path d="M40 32h40l-5 66a7 7 0 0 1-7 6H52a7 7 0 0 1-7-6z" fill="#0F6B5C"/><rect x="45" y="56" width="30" height="13" rx="3" fill="#fff" opacity=".9"/>',
+  buds: '<rect width="120" height="120" rx="18" fill="#EEF0F7"/><rect x="28" y="62" width="64" height="32" rx="16" fill="#fff" stroke="#C3C9D6" stroke-width="3"/><circle cx="47" cy="44" r="13" fill="#2F3747"/><rect x="43" y="44" width="8" height="26" rx="4" fill="#2F3747"/><circle cx="73" cy="44" r="13" fill="#2F3747"/><rect x="69" y="44" width="8" height="26" rx="4" fill="#2F3747"/>',
+  mug: '<rect width="120" height="120" rx="18" fill="#F6EEE6"/><rect x="32" y="38" width="46" height="52" rx="8" fill="#B5835A"/><path d="M78 50h7a11 11 0 0 1 0 22h-7" fill="none" stroke="#B5835A" stroke-width="7"/>',
+  towel: '<rect width="120" height="120" rx="18" fill="#EAF2FB"/><rect x="26" y="34" width="68" height="22" rx="6" fill="#7FA8D8"/><rect x="26" y="62" width="68" height="22" rx="6" fill="#A9C6E8"/>',
+  tote: '<rect width="120" height="120" rx="18" fill="#F3F0E6"/><path d="M46 48a14 14 0 0 1 28 0" fill="none" stroke="#8C7A55" stroke-width="5"/><rect x="33" y="48" width="54" height="46" rx="6" fill="#D8CBA8"/>',
+  notebook: '<rect width="120" height="120" rx="18" fill="#EEF3EA"/><rect x="37" y="26" width="48" height="68" rx="5" fill="#5D7F4B"/><rect x="43" y="26" width="4" height="68" fill="#46623A"/>',
+  plus: '<rect width="120" height="120" rx="18" fill="#E3F1EE"/><circle cx="60" cy="60" r="31" fill="#0F6B5C"/><path d="M60 45v30M45 60h30" stroke="#fff" stroke-width="8" stroke-linecap="round"/>',
+  share: '<rect width="120" height="120" rx="18" fill="#FFF1E8"/><path d="M42 60L80 40M42 60L80 80" stroke="#C2410C" stroke-width="5"/><circle cx="42" cy="60" r="12" fill="#C2410C"/><circle cx="80" cy="40" r="12" fill="#C2410C"/><circle cx="80" cy="80" r="12" fill="#C2410C"/>',
+};
+const art = (kind, cls = '') => `<svg class="art ${cls}" viewBox="0 0 120 120" aria-hidden="true">${ART[kind] || ''}</svg>`;
+
+/* ─── 11. 공통 UI 조각 ──────────────────────────────────────────── */
+function topBar({ title = '', back, logo = false, preview = false } = {}) {
+  const showBack = back ?? canGoBack();
+  return `<header class="topbar">
+    ${showBack ? '<button class="topbar-back" data-act="back">‹ 이전</button>' : '<span></span>'}
+    ${logo ? '<div class="logo">MOA<span>Market</span></div>' : `<h1 class="topbar-title">${title}</h1>`}
+    ${preview || !T ? '<span></span>' : '<button class="topbar-task" data-act="openInstruction">과제 보기</button>'}
+  </header>`;
+}
+function bottomNav(active) {
+  const count = T ? T.cart.length : 0;
+  const tab = (to, ic, label) =>
+    `<button class="nav-item ${active === to ? 'is-active' : ''}" data-act="tab" data-to="${to}">${icon(ic)}<span>${label}</span>${to === 'cart' && count ? `<span class="badge">${count}</span>` : ''}</button>`;
+  return `<nav class="bottom-nav" aria-label="메뉴">${tab('home', 'home', '홈')}${tab('list', 'grid', '카테고리')}${tab('cart', 'cart', '장바구니')}${tab('my', 'user', 'MY')}</nav>`;
+}
+// 경고 영역: 모든 의사결정 화면 상단, 높이 고정. NW·미리보기에서는 빈 영역만 확보.
+function warningSlot(ctx, preview) {
+  const filled = !preview && ctx && ctx.decision && ctx.decision.visualShown;
+  return `<div class="warning-slot" ${preview ? '' : 'id="warningSlot"'}>${filled ? WARNING_HTML : ''}</div>`;
+}
+function priceHTML(p) {
+  return p.sale
+    ? `<span class="discount">${p.sale}%</span><span class="price">${won(p.salePrice)}</span><span class="strike">${won(p.price)}</span>`
+    : `<span class="price">${won(p.price)}</span>`;
+}
+function itemRow(p) {
+  return `<div class="item-row">${art(p.art)}<div><p class="item-name">${p.name}</p><p class="item-meta">수량 1개</p><p class="item-price">${won(productPrice(p))}</p></div></div>`;
+}
+function doneScreen(title, text, act, label) {
+  return `<main class="screen center-screen"><div class="intro-card">
+    <div class="done-mark" aria-hidden="true">✓</div>
+    <h2 class="done-title">${title}</h2><p class="done-text">${text}</p>
+    <button class="btn btn-primary btn-xl" data-act="${act}">${label}</button></div></main>`;
+}
+const pv = preview => (preview ? 'tabindex="-1"' : '');
+
+/* ─── 12. 진행 화면 (시작 · 과제 안내 · 완료 · 인지 확인) ──────────── */
+function screenStart() {
+  return `<main class="screen center-screen">
+    <div class="start-card">
+      <div class="logo logo-lg" data-act="logoTap">MOA<span>Market</span></div>
+      <p class="start-lead">참가 번호를 입력해 주세요.</p>
+      <form id="startForm" autocomplete="off">
+        <label class="sr-only" for="pid">참가 번호</label>
+        <input id="pid" class="input-xl" type="text" inputmode="text" autocapitalize="characters" autocorrect="off"
+          spellcheck="false" maxlength="4" placeholder="예: P01" value="${esc(startDraft)}">
+        <p class="form-error" role="alert">${esc(startError)}</p>
+        <button type="submit" class="btn btn-primary btn-xl">실험 시작</button>
+      </form>
+    </div>
+    ${DEBUG ? debugStartTools() : ''}
+  </main>`;
+}
+function debugStartTools() {
+  const v = validateAssignments();
+  return `<section class="dbg-tools">
+    <h2>DEBUG MODE (참가자 화면에는 표시되지 않음)</h2>
+    <p>진동: <b>${HAPTIC_METHOD_LABEL}</b> · 배정표 검증: <b>${v.allOk ? '정상' : '오류'}</b></p>
+    <p>경고 테스트 (버튼 터치 시 실제 소리·진동 발생)</p>
+    <div class="r-test">${CONDITIONS.map(c => `<button class="btn btn-secondary" data-act="testWarning" data-cond="${c}">${c}</button>`).join('')}</div>
+    <p style="margin-top:10px"><a href="?researcher=1">연구자 모드 열기</a></p>
+  </section>`;
+}
+function screenTaskIntro() {
+  const idx = session.currentIndex;
+  const a = session.assignment[idx];
+  const t = TASK_TEXT[a.taskId];
+  return `<main class="screen center-screen"><div class="intro-card">
+    <p class="step-label">과제 ${idx + 1} / ${session.assignment.length}</p>
+    ${idx > 0 ? '<p class="intro-sub">앞의 과제와는 관계없는 새로운 상황입니다.</p>' : ''}
+    <div class="task-box"><p class="task-box-label">과제</p><p class="task-box-text">${t.instruction}</p>${t.note ? `<p class="task-box-note">${t.note}</p>` : ''}</div>
+    <p class="intro-hint">과제 중에 화면 오른쪽 위 <b>과제 보기</b>를 누르면 이 내용을 다시 볼 수 있습니다.</p>
+    <button class="btn btn-primary btn-xl" data-act="beginTask">과제 시작하기</button>
+  </div></main>`;
+}
+function screenTaskDone() {
+  const moreTasks = session.phase === 'tasks';
+  return doneScreen('과제를 마쳤습니다',
+    moreTasks ? '다음 과제를 시작합니다.' : '모든 과제를 마쳤습니다. 다음 단계로 넘어갑니다.',
+    'afterTask', moreTasks ? '다음 과제로' : '다음으로');
+}
+function screenRecogIntro() {
+  return `<main class="screen center-screen"><div class="intro-card">
+    <p class="step-label">마지막 단계</p>
+    <h2 class="done-title" style="text-align:left;margin-top:8px">앞에서 보았던 화면을 다시 보여드립니다</h2>
+    <p class="intro-sub" style="margin:12px 0 24px">화면을 하나씩 보면서 질문에 답해 주세요. 정답은 없습니다. 느낀 그대로 답해 주시면 됩니다.</p>
+    <button class="btn btn-primary btn-xl" data-act="startRecognition">시작하기</button>
+  </div></main>`;
+}
+function screenRecog() {
+  const idx = session.recogIndex;
+  const a = session.assignment[idx];
+  const yes = recogDraft.yes;
+  return `<main class="screen recog">
+    <p class="step-label">화면 ${idx + 1} / ${session.assignment.length}</p>
+    <p class="recog-lead">앞의 과제에서 보았던 화면입니다.</p>
+    <div class="preview-frame" inert aria-hidden="true">${decisionPreview(a.taskId)}</div>
+    <section class="recog-q">
+      <h2 class="q-title">이 화면에서 사용자의 선택을 특정 방향으로 유도한다고 느낀 요소가 있었나요?</h2>
+      <div class="choice-row">
+        <button class="btn choice ${yes === true ? 'is-selected' : ''}" data-act="recogAnswer" data-v="1" aria-pressed="${yes === true}">있었다</button>
+        <button class="btn choice ${yes === false ? 'is-selected' : ''}" data-act="recogAnswer" data-v="0" aria-pressed="${yes === false}">없었다</button>
+      </div>
+      <div id="recogTextWrap" class="${yes === true ? '' : 'hidden'}">
+        <label class="q-sub" for="recogText">어떤 부분이 그렇게 느껴졌나요?</label>
+        <textarea id="recogText" rows="4" placeholder="자유롭게 적어 주세요">${esc(recogDraft.text)}</textarea>
+      </div>
+      <p class="form-error" id="recogError" role="alert"></p>
+      <button class="btn btn-primary btn-xl" data-act="recogNext">다음</button>
+    </section>
+  </main>`;
+}
+function screenEnd() {
+  return `<main class="screen center-screen"><div class="intro-card" style="text-align:center">
+    <div class="done-mark" aria-hidden="true">✓</div>
+    <h2 class="done-title">실험이 완료되었습니다.</h2>
+    <p class="done-text" style="margin-bottom:0">연구자의 안내를 기다려 주세요.</p>
+  </div></main>`;
+}
+// 인지 확인용 미리보기: 경고 없이(빈 경고 영역) 핵심 화면을 다시 그림
+function decisionPreview(taskId) {
+  const ctx = { taskId, condition: 'NW', decision: null, addon: true, orderItems: ['tumbler'], plusTrial: false, shared: false };
+  switch (taskId) {
+    case 'N': return screenNagSecond({}, ctx, true);
+    case 'O': return screenRetention({}, ctx, true);
+    case 'S': return screenCheckout({}, ctx, true);
+    case 'I': return screenPlusOffer({}, ctx, true);
+    case 'F': return screenShareOffer({}, ctx, true);
+    default: return '';
+  }
+}
+
+/* ─── 13. 쇼핑 앱 화면 ──────────────────────────────────────────── */
+function productCard(id) {
+  const p = PRODUCTS[id];
+  return `<button class="pcard" data-act="openProduct" data-id="${id}">${art(p.art)}
+    <p class="pcard-name">${p.name}</p>
+    <p class="pcard-price">${won(p.price)}${p.available ? '' : '<span class="tag-soldout">품절</span>'}</p></button>`;
+}
+function screenHome() {
+  return `<div class="screen has-nav">${topBar({ logo: true, back: false })}
+    <main class="content">
+      <button class="search-bar" data-act="go" data-to="list">${icon('search', 2.4)}<span>상품을 검색해 보세요</span></button>
+      <section class="banner"><p class="banner-kicker">이번 주 기획전</p><p class="banner-title">가을 생활용품 모음</p><p class="banner-sub">매일 쓰는 물건을 새로 준비해 보세요</p></section>
+      <h2 class="section-title">오늘의 추천 상품</h2>
+      <div class="grid">${['tumbler', 'mug', 'towel', 'tote'].map(productCard).join('')}</div>
+      <button class="btn btn-secondary" data-act="go" data-to="list">생활용품 전체 보기</button>
+    </main>${bottomNav('home')}</div>`;
+}
+function screenList() {
+  const ids = ['tumbler', 'mug', 'towel', 'tote', 'notebook'];
+  const row = id => {
+    const p = PRODUCTS[id];
+    return `<li><button class="plist-row" data-act="openProduct" data-id="${id}">${art(p.art)}<div>
+      <p class="plist-name">${p.name}</p><p class="plist-desc">${p.desc}</p>
+      <p class="plist-price">${won(p.price)}${p.available ? '' : '<span class="tag-soldout">품절</span>'}</p></div></button></li>`;
+  };
+  return `<div class="screen has-nav">${topBar({ title: '생활용품' })}
+    <main class="content"><p class="muted" style="margin-bottom:10px">상품 ${ids.length}개</p><ul class="plist">${ids.map(row).join('')}</ul></main>
+    ${bottomNav('list')}</div>`;
+}
+function screenDetail({ id }) {
+  const p = PRODUCTS[id] || PRODUCTS.tumbler;
+  const showNag1 = T && T.taskId === 'N' && T.nag1Open && id === 'tumbler';
+  const actions = p.available
+    ? `<div class="btn-row"><button class="btn btn-secondary" data-act="addToCart" data-id="${p.id}">장바구니 담기</button>
+       <button class="btn btn-primary" data-act="buyNow" data-id="${p.id}">구매하기</button></div>`
+    : '<button class="btn btn-secondary" disabled>일시품절</button>';
+  return `<div class="screen">${topBar({ title: '상품 정보' })}
+    <main class="content">
+      <div class="detail-art">${art(p.art)}</div>
+      <h2 class="detail-name">${p.name}</h2><p class="detail-desc">${p.desc}</p>
+      <div class="detail-price">${priceHTML(p)}</div>
+      <ul class="detail-info"><li><span>배송</span><b>무료배송 · 내일 도착 예정</b></li><li><span>적립</span><b>구매 금액의 1%</b></li></ul>
+      <p class="detail-body">${p.body}</p>
+      ${actions}
+    </main>
+    ${showNag1 ? `<div class="sheet-backdrop"><div class="sheet" role="dialog" aria-modal="true">
+      <div class="sheet-row">${art('buds')}<p class="sheet-text">MOA Buds가 현재 30% 할인 중입니다.</p></div>
+      <button class="btn btn-primary btn-xl" data-act="closeNagFirst">계속 쇼핑하기</button></div></div>` : ''}
+  </div>`;
+}
+function screenCart() {
+  const items = T.cart.map(c => PRODUCTS[c.id]);
+  const total = items.reduce((s, p) => s + productPrice(p), 0);
+  return `<div class="screen has-nav">${topBar({ title: '장바구니' })}
+    <main class="content">
+      ${items.length ? `<section class="card">${items.map(itemRow).join('')}</section>
+        <section class="card"><div class="sum-row"><span>상품 금액</span><b>${won(total)}</b></div><div class="sum-row"><span>배송비</span><b>무료</b></div>
+        <div class="sum-total"><span>합계</span><b>${won(total)}</b></div></section>`
+        : '<p class="empty">장바구니에 담긴 상품이 없습니다.</p>'}
+      <button class="btn btn-primary btn-xl" data-act="orderFromCart" ${items.length ? '' : 'disabled'}>주문하기</button>
+    </main>${bottomNav('cart')}</div>`;
+}
+function orderSummary(ctx) {
+  const ids = ctx.orderItems && ctx.orderItems.length ? ctx.orderItems : ['tumbler'];
+  const items = ids.map(id => PRODUCTS[id]);
+  const subtotal = items.reduce((s, p) => s + productPrice(p), 0);
+  const addon = ctx.taskId === 'S' && ctx.addon ? PRICE.addon : 0;
+  const discounts = [];
+  if (ctx.taskId === 'I' && ctx.plusTrial) discounts.push(['MOA Plus 체험 할인', PRICE.plusDiscount]);
+  if (ctx.taskId === 'F' && ctx.shared) discounts.push(['친구 공유 할인', PRICE.shareDiscount]);
+  const total = subtotal + addon - discounts.reduce((s, d) => s + d[1], 0);
+  return { items, subtotal, addon, discounts, total };
+}
+function summaryRows(s) {
+  return `<h2 class="card-title">결제 금액</h2>
+    <div class="sum-row"><span>상품 금액</span><b>${won(s.subtotal)}</b></div>
+    ${s.addon ? `<div class="sum-row"><span>안심 배송</span><b>+${won(s.addon)}</b></div>` : ''}
+    ${s.discounts.map(d => `<div class="sum-row minus"><span>${d[0]}</span><b>-${won(d[1])}</b></div>`).join('')}
+    <div class="sum-row"><span>배송비</span><b>무료</b></div>
+    <div class="sum-total"><span>총 결제금액</span><b>${won(s.total)}</b></div>`;
+}
+function screenCheckout(_, ctx = T, preview = false) {
+  const isDecision = ctx.taskId === 'S';
+  const s = orderSummary(ctx);
+  const addon = isDecision ? `<section class="card"><h2 class="card-title">안심 배송 서비스</h2>
+      <button type="button" class="check-row" role="checkbox" aria-checked="${ctx.addon}" data-act="toggleAddon" ${preview ? 'tabindex="-1"' : 'id="addonToggle"'}>
+        <span class="check-box">${ctx.addon ? icon('check', 3) : ''}</span><span>안심 배송 <b>+${won(PRICE.addon)}</b></span></button>
+      <p class="muted small">배송 중 파손·분실 시 상품 금액을 보상해 드립니다.</p></section>` : '';
+  return `<div class="screen">${topBar({ title: '주문 / 결제', back: preview ? false : (isDecision ? false : undefined), preview })}
+    ${isDecision ? warningSlot(ctx, preview) : ''}
+    <main class="content">
+      <section class="card"><h2 class="card-title">주문 상품</h2>${s.items.map(itemRow).join('')}</section>
+      ${addon}
+      <section class="card compact-info"><p><span class="muted">배송지</span> 기본 배송지 (집)</p><p><span class="muted">결제 수단</span> MOA Pay · 등록된 카드</p></section>
+      <section class="card" ${preview ? '' : 'id="summaryCard"'}>${summaryRows(s)}</section>
+      <button class="btn btn-primary btn-xl" data-act="pay" ${pv(preview)}>결제하기</button>
+    </main></div>`;
+}
+function screenOrderDone({ total }) {
+  return doneScreen('주문이 완료되었습니다', `결제 금액 ${won(total || 0)}`, 'orderDoneOk', '확인');
+}
+function screenMy() {
+  const member = T && T.member;
+  const row = (label, right = '›', act = 'unavailable') =>
+    `<li><button class="menu-row" data-act="${act}" data-label="${label}" ${act === 'go' ? 'data-to="plus"' : ''}><span>${label}</span><span class="menu-right">${right}</span></button></li>`;
+  return `<div class="screen has-nav">${topBar({ title: 'MY' })}
+    <main class="content">
+      <section class="card profile"><div class="avatar">${icon('user')}</div><div><p class="profile-name">MOA 회원님</p><p class="muted">적립금 1,250원 · 쿠폰 2장</p></div></section>
+      <ul class="menu">
+        ${row('MOA Plus 멤버십', `${member ? '<span class="pill pill-brand">이용 중</span>' : '<span class="pill">미가입</span>'} ›`, 'go')}
+        ${row('주문 내역')}${row('쿠폰함')}${row('배송지 관리')}${row('고객센터')}${row('설정')}
+      </ul>
+    </main>${bottomNav('my')}</div>`;
+}
+function screenPlus() {
+  const member = T && T.member;
+  const benefits = '<ul class="benefits"><li>무료배송 무제한</li><li>구매 금액 5% 적립</li><li>회원 전용 할인가</li></ul>';
+  if (!member) {
+    return `<div class="screen">${topBar({ title: 'MOA Plus' })}<main class="content">
+      <section class="plus-hero"><p>MOA Plus 멤버십</p><p class="big">월 4,900원</p></section>
+      <section class="card"><h2 class="card-title">멤버십 혜택</h2>${benefits}</section>
+      <p class="muted" style="text-align:center;margin-top:12px">현재 가입하지 않은 상태입니다.</p></main></div>`;
+  }
+  return `<div class="screen">${topBar({ title: 'MOA Plus' })}<main class="content">
+    <section class="plus-hero"><p>MOA Plus 이용 중</p><p class="big">이번 달 13,700원 아꼈어요</p><p>월 4,900원 · 매월 15일 결제</p></section>
+    <section class="card"><h2 class="card-title">이용 중인 혜택</h2>${benefits}</section>
+    <button class="btn btn-primary btn-xl" data-act="go" data-to="plusManage">멤버십 관리</button></main></div>`;
+}
+function screenPlusManage() {
+  return `<div class="screen">${topBar({ title: '멤버십 관리' })}<main class="content">
+    <section class="card"><ul class="kv">
+      <li><span>멤버십</span><b>MOA Plus (월간)</b></li><li><span>이용 시작일</span><b>2026.03.15</b></li>
+      <li><span>결제 금액</span><b>월 4,900원</b></li><li><span>다음 결제일</span><b>매월 15일</b></li><li><span>결제 수단</span><b>MOA Pay</b></li>
+    </ul></section>
+    <button class="btn btn-secondary" data-act="unavailable" data-label="결제 수단 변경">결제 수단 변경</button>
+    <button class="btn btn-secondary" data-act="unavailable" data-label="결제 알림 설정">결제 알림 설정</button>
+    <p class="manage-foot">멤버십을 더 이상 이용하지 않으시나요?</p>
+    <button class="btn-text" data-act="startCancel">멤버십 해지하기</button>
+  </main></div>`;
+}
+
+/* ─── 14. 의사결정 화면 (경고 영역 + 다크패턴) ─────────────────────── */
+// TASK 01 Nagging — 2차 추천
+function screenNagSecond(_, ctx = T, preview = false) {
+  const b = PRODUCTS.buds;
+  return `<div class="screen">${topBar({ title: '추천 상품', back: false, preview })}${warningSlot(ctx, preview)}
+    <main class="content">
+      <h2 class="dp-title">할인 상품을 다시 확인해보세요</h2>
+      <section class="card offer-card">${art('buds')}<div>
+        <p class="item-name" style="font-size:20px">${b.name}</p><span class="sale-pill">30% 할인</span>
+        <p style="margin-top:4px"><span class="strike">${won(b.price)}</span> <b style="font-size:22px">${won(b.salePrice)}</b></p>
+      </div></section>
+      <div class="btn-stack">
+        <button class="btn btn-primary btn-xl" data-act="nagChoice" data-c="view_discount" ${pv(preview)}>할인 상품 보기</button>
+        <button class="btn btn-secondary btn-xl" data-act="nagChoice" data-c="continue_shopping" ${pv(preview)}>원래 쇼핑 계속하기</button>
+      </div>
+    </main></div>`;
+}
+// TASK 02 Obstruction — 혜택 유지 권유
+function screenRetention(_, ctx = T, preview = false) {
+  return `<div class="screen">${topBar({ title: '멤버십 해지', back: false, preview })}${warningSlot(ctx, preview)}
+    <main class="content">
+      <h2 class="dp-title">정말 혜택을 포기하시겠어요?</h2>
+      <div class="stat-grid">
+        <div class="stat"><p class="stat-label">이번 달 받은 혜택</p><p class="stat-value">13,700원</p></div>
+        <div class="stat stat-accent"><p class="stat-label">앞으로 받을 수 있는 혜택</p><p class="stat-value">최대 25,000원</p></div>
+      </div>
+      <ul class="lose-list"><li>무료배송 혜택이 사라져요</li><li>구매 금액 5% 적립이 중단돼요</li><li>회원 전용 할인가를 받을 수 없어요</li></ul>
+      <div class="btn-stack">
+        <button class="btn btn-primary btn-xl" data-act="retentionChoice" data-c="keep_benefits" ${pv(preview)}>혜택 계속 받기</button>
+        <button class="btn btn-secondary btn-xl" data-act="retentionChoice" data-c="cancel_anyway" ${pv(preview)}>그래도 해지하기</button>
+      </div>
+    </main></div>`;
+}
+function screenCancelConfirm() {
+  return `<div class="screen">${topBar({ title: '멤버십 해지', back: false })}<main class="content">
+    <h2 class="dp-title">해지 전에 확인해 주세요</h2>
+    <section class="card"><ul class="kv"><li><span>혜택 이용 가능</span><b>이번 결제 기간까지</b></li><li><span>다음 결제</span><b>진행되지 않음</b></li></ul></section>
+    <div class="btn-stack">
+      <button class="btn btn-primary btn-xl" data-act="finalCancel" data-c="complete">해지 완료하기</button>
+      <button class="btn btn-secondary btn-xl" data-act="finalCancel" data-c="keep">멤버십 유지하기</button>
+    </div></main></div>`;
+}
+// TASK 04 Interface Interference — 강조된 체험 vs 약한 일반 구매
+function screenPlusOffer(_, ctx = T, preview = false) {
+  const price = PRICE.tumbler;
+  return `<div class="screen">${topBar({ title: '주문하기', back: false, preview })}${warningSlot(ctx, preview)}
+    <main class="content">
+      <section class="card hero-center">${art('plus')}
+        <h2 class="dp-title" style="margin-bottom:4px">MOA Plus로 더 저렴하게 구매하세요</h2>
+        <p class="hero-big">무료 체험으로<br>오늘 5,000원 할인</p>
+        <div class="compare"><span class="strike">${won(price)}</span><span class="now">${won(price - PRICE.plusDiscount)}</span></div>
+        <ul class="benefits" style="text-align:left"><li>무료배송 무제한</li><li>구매 금액 5% 적립</li></ul>
+      </section>
+      <button class="btn btn-primary btn-hero" data-act="plusOfferChoice" data-c="start_plus_trial" ${pv(preview)}>MOA Plus 무료 체험 시작하기</button>
+      <p class="fineprint">무료 체험 30일 후 월 4,900원이 자동 결제됩니다.</p>
+      <button class="btn-text" data-act="plusOfferChoice" data-c="continue_regular" ${pv(preview)}>일반 구매 계속하기</button>
+    </main></div>`;
+}
+function screenPlusStarted() {
+  return doneScreen('MOA Plus 무료 체험이 시작되었습니다', '오늘 주문에 5,000원 할인이 적용됩니다.', 'continueToCheckout', '결제 계속하기');
+}
+// TASK 05 Forced Action — 공유 요구
+function screenShareOffer(_, ctx = T, preview = false) {
+  return `<div class="screen">${topBar({ title: '주문하기', back: false, preview })}${warningSlot(ctx, preview)}
+    <main class="content">
+      <section class="card hero-center">${art('share')}
+        <h2 class="dp-title" style="margin-bottom:8px">친구와 공유하고<br>5,000원 할인받기</h2>
+        <p class="dp-lead">친구에게 MOA 상품을 공유하면<br>결제금액에서 5,000원을 할인해드립니다.</p>
+      </section>
+      <div class="btn-stack">
+        <button class="btn btn-primary btn-xl" data-act="shareChoice" data-c="share_for_discount" ${pv(preview)}>친구에게 공유하고 할인받기</button>
+        <button class="btn btn-secondary btn-xl" data-act="shareChoice" data-c="buy_without_discount" ${pv(preview)}>할인 없이 구매하기</button>
+      </div>
+    </main></div>`;
+}
+function screenShareDone() {
+  return doneScreen('친구에게 공유되었습니다.', '5,000원 할인이 적용되었습니다.', 'continueToCheckout', '결제 계속하기');
+}
+
+const SCREENS = {
+  start: screenStart, taskIntro: screenTaskIntro, taskDone: screenTaskDone,
+  recogIntro: screenRecogIntro, recog: screenRecog, end: screenEnd,
+  home: screenHome, list: screenList, detail: screenDetail, cart: screenCart, checkout: screenCheckout,
+  orderDone: screenOrderDone, my: screenMy, plus: screenPlus, plusManage: screenPlusManage,
+  nagSecond: screenNagSecond, retention: screenRetention, cancelConfirm: screenCancelConfirm,
+  cancelDone: () => doneScreen('멤버십 해지가 완료되었습니다', '이번 결제 기간이 끝나면 혜택이 종료됩니다.', 'toTaskDone', '확인'),
+  keepDone: () => doneScreen('MOA Plus 혜택이 계속 유지됩니다', '다음 결제일에 월 4,900원이 결제됩니다.', 'toTaskDone', '확인'),
+  plusOffer: screenPlusOffer, plusStarted: screenPlusStarted,
+  shareOffer: screenShareOffer, shareDone: screenShareDone,
+};
+
+/* ─── 15. 동작 (참가자 흐름) ────────────────────────────────────── */
+function actStart() {
+  const input = document.getElementById('pid');
+  startDraft = input ? input.value : '';
+  const id = normalizeId(startDraft);
+  if (!id) { startError = '참가 번호를 다시 확인해 주세요. (예: P01)'; render(); return; }
+  ensureAudio();                      // 사용자 터치 순간 AudioContext 생성/resume
+  if (!HAPTIC_SUPPORTED) {
+    if (!DEBUG) {
+      showModal({ title: '연구자 확인 필요', body: esc(HAPTIC_UNSUPPORTED_MESSAGE), actions: [{ label: '확인', primary: true }] });
+      return;
+    }
+    showModal({ title: '연구자 확인 필요', body: esc(HAPTIC_UNSUPPORTED_MESSAGE) + '<br><br>(DEBUG) 진동 없이 테스트로 진행할 수 있습니다. 진동 조건은 hapticTriggered=0으로 기록됩니다.',
+      actions: [{ label: '진동 없이 테스트 진행', primary: true, onClick: () => startSession(id) }, { label: '취소' }] });
+    return;
+  }
+  startSession(id);
+}
+function startSession(id) {
+  let p = store.participants[id];
+  if (p && p.phase === 'done') {
+    showModal({ title: '이미 완료된 참가 번호', body: `${id}의 실험은 이미 완료되었습니다. 연구자 모드(?researcher=1)에서 기록을 확인하거나 삭제한 뒤 다시 진행해 주세요.`,
+      actions: [{ label: '확인', primary: true }] });
+    return;
+  }
+  if (p) {
+    const done = Object.keys(p.results).length;
+    showModal({ title: '이전 기록이 있습니다',
+      body: `${id}: ${p.phase === 'tasks' ? `${done}/5 과제 완료` : '과제 완료, 마지막 질문 진행 중'} 상태입니다.<br>이어서 진행할까요? (진행 중이던 과제는 처음부터 다시 시작합니다)`,
+      actions: [{ label: '이어서 진행', primary: true, onClick: () => enterSession(p, true) }, { label: '취소' }] });
+    return;
+  }
+  p = {
+    participantId: id, mode: DEBUG ? 'debug' : 'participant',
+    createdAt: iso(), updatedAt: iso(), completedAt: null,
+    assignment: ASSIGNMENTS[id].map(x => ({ ...x })),
+    currentIndex: 0, phase: 'tasks', recogIndex: 0,
+    results: {}, recognition: {}, attempts: {}, device: deviceInfo(), sessionEvents: [],
+  };
+  store.participants[id] = p;
+  saveStore();
+  enterSession(p, false);
+}
+function enterSession(p, resumed) {
+  session = p;
+  p.sessionEvents.push({ type: resumed ? 'resumed' : 'started', at: iso() });
+  saveStore();
+  startDraft = ''; startError = '';
+  requestWakeLock();
+  maybeFullscreen();
+  if (p.phase === 'tasks') go('taskIntro', {}, { push: false });
+  else if (p.phase === 'recognition') { recogDraft = { yes: null, text: '' }; go(p.recogIndex === 0 ? 'recogIntro' : 'recog', {}, { push: false }); }
+}
+function actBeginTask() {
+  ensureAudio();
+  const idx = session.currentIndex;
+  const a = session.assignment[idx];
+  session.attempts[a.taskId] = (session.attempts[a.taskId] || 0) + 1;
+  saveStore();
+  T = newTaskState(a.taskId, a.condition, idx + 1);   // 과제마다 완전히 새로운 상태
+  logEvent('task_started', { attempt: session.attempts[a.taskId] });
+  navStack = [];
+  go('home', {}, { push: false });
+  if (CONDITION_SPEC[a.condition].haptic && !HAPTIC_SUPPORTED) {
+    showModal({ title: '연구자 확인 필요', body: esc(HAPTIC_UNSUPPORTED_MESSAGE), actions: [{ label: '확인', primary: true }] });
+  }
+}
+function actAfterTask() {
+  if (session.phase === 'recognition') go('recogIntro', {}, { push: false });
+  else go('taskIntro', {}, { push: false });
+}
+function actOpenInstruction() {
+  if (!T) return;
+  logEvent('instruction_reopened');
+  const t = TASK_TEXT[T.taskId];
+  showModal({ title: '지금 할 일', body: `<p style="font-size:20px;font-weight:700;color:var(--text)">${t.instruction}</p>${t.note ? `<p style="margin-top:8px">${t.note}</p>` : ''}`,
+    actions: [{ label: '닫기', primary: true }] });
+}
+
+// 쇼핑 동작
+function addCart(id) { if (!T.cart.some(c => c.id === id)) T.cart.push({ id }); }
+function actOpenProduct({ id }) {
+  if (!T) return;
+  if (T.taskId === 'N' && id === 'tumbler' && !T.nag1Shown) {
+    T.nag1Shown = true; T.nag1Open = true;
+    logEvent('nag_first_shown');
+  }
+  go('detail', { id });
+}
+function actCloseNagFirst() {
+  if (!T) return;
+  T.nag1Open = false;
+  logEvent('nag_first_closed');
+  render({ keepScroll: true });
+}
+function actAddToCart({ id }) {
+  if (!T) return;
+  addCart(id);
+  logEvent('add_to_cart', { id });
+  if (T.taskId === 'N' && id === 'tumbler' && !T.decision) { T.nagIntent = 'cart'; go('nagSecond'); return; }
+  go('cart');
+}
+function actBuyNow({ id }) {
+  if (!T) return;
+  logEvent('buy_now', { id });
+  T.orderItems = [id];
+  if (T.taskId === 'N' && id === 'tumbler' && !T.decision) { T.nagIntent = 'buy'; go('nagSecond'); return; }
+  proceedToOrder();
+}
+function actOrderFromCart() {
+  if (!T || !T.cart.length) return;
+  T.orderItems = T.cart.map(c => c.id);
+  logEvent('order_from_cart', { items: T.orderItems.join('|') });
+  proceedToOrder();
+}
+function proceedToOrder() {
+  switch (T.taskId) {
+    case 'N': finishNagging(); return;                                  // 구매 준비 화면 도달 = 과제 종료
+    case 'I': go(T.decision ? 'checkout' : 'plusOffer'); return;
+    case 'F': go(T.decision ? 'checkout' : 'shareOffer'); return;
+    default: go('checkout');                                            // S: 결제 화면이 의사결정 화면
+  }
+}
+
+// TASK 01 Nagging
+function actNagChoice({ c }) {
+  if (!recordDecision(c)) return;
+  if (c === 'view_discount') go('detail', { id: 'buds' });
+  else if (T.nagIntent === 'buy') finishNagging();
+  else go('cart');
+}
+function finishNagging() {
+  const items = T.orderItems.length ? T.orderItems : T.cart.map(c => c.id);
+  logEvent('purchase_prep_reached', { items: items.join('|') });
+  const d = T.decision;
+  finishTask({
+    resistance: d ? CHOICE_RESISTANCE.N[d.choice] : '',
+    taskSuccess: items.includes('tumbler') ? 1 : 0,
+    extra: { budsSelected: items.includes('buds') ? 1 : 0, orderItems: items.join('|') },
+  });
+  endTaskView();
+}
+
+// TASK 02 Obstruction
+function actStartCancel() { if (T) go('retention'); }
+function actRetentionChoice({ c }) {
+  if (!recordDecision(c)) return;
+  if (c === 'keep_benefits') {
+    finishTask({ resistance: 0, taskSuccess: 0, extra: { finalCancellationCompleted: 0, finalChoice: 'keep_benefits' } });
+    go('keepDone', {}, { push: false });
+  } else {
+    go('cancelConfirm', {}, { push: false });
+  }
+}
+function actFinalCancel({ c }) {
+  if (!T || T.finished) return;
+  logEvent('final_cancel_step', { choice: c });
+  if (c === 'complete') {
+    T.member = false;
+    finishTask({ resistance: 1, taskSuccess: 1, extra: { finalCancellationCompleted: 1, finalChoice: 'cancel_completed' } });
+    go('cancelDone', {}, { push: false });
+  } else {
+    finishTask({ resistance: 0, taskSuccess: 0, extra: { finalCancellationCompleted: 0, finalChoice: 'keep_membership' } });
+    go('keepDone', {}, { push: false });
+  }
+}
+
+// TASK 03 Sneaking
+function actToggleAddon() {
+  if (!T || T.taskId !== 'S' || !T.decision || T.decision.t1 != null) return;
+  T.addon = !T.addon;
+  T.addonToggleCount++;
+  const sinceT0 = Math.round(performance.now() - T.decision.t0);
+  if (T.optionFirstChangeMs == null) T.optionFirstChangeMs = sinceT0;
+  logEvent('addon_toggle', { checked: T.addon });
+  const btn = document.getElementById('addonToggle');
+  if (btn) {
+    btn.setAttribute('aria-checked', String(T.addon));
+    btn.querySelector('.check-box').innerHTML = T.addon ? icon('check', 3) : '';
+  }
+  const card = document.getElementById('summaryCard');
+  if (card) card.innerHTML = summaryRows(orderSummary(T));
+  debugUpdate();
+}
+
+// 결제 (S의 최종 선택 / I·F의 과제 완료)
+function actPay() {
+  if (!T || T.finished) return;
+  const s = orderSummary(T);
+  if (T.taskId === 'S') {
+    if (!recordDecision(T.addon ? 'pay_with_option' : 'pay_without_option')) return;
+    finishTask({
+      resistance: T.addon ? 0 : 1,
+      taskSuccess: s.total <= PRICE.budget ? 1 : 0,
+      extra: {
+        optionChanged: T.addonToggleCount > 0 ? 1 : 0,
+        optionChangeTime: T.optionFirstChangeMs ?? '',
+        optionToggleCount: T.addonToggleCount,
+        finalOptionSelected: T.addon ? 1 : 0,
+        paidAmount: s.total, orderItems: s.items.map(p => p.id).join('|'),
+      },
+    });
+  } else if ((T.taskId === 'I' || T.taskId === 'F') && T.decision && T.decision.choice) {
+    finishTask({
+      resistance: CHOICE_RESISTANCE[T.taskId][T.decision.choice],
+      taskSuccess: 1,
+      extra: { paidAmount: s.total, orderItems: s.items.map(p => p.id).join('|') },
+    });
+  } else {
+    logEvent('order_paid', { total: s.total });          // 과제 목표와 무관한 구매 (예: O 과제 중)
+  }
+  go('orderDone', { total: s.total }, { push: false });
+}
+function actOrderDoneOk() {
+  if (T && T.finished) { endTaskView(); return; }
+  navStack = [];
+  go('home', {}, { push: false });
+}
+
+// TASK 04 Interface Interference
+function actPlusOfferChoice({ c }) {
+  if (!recordDecision(c)) return;
+  if (c === 'start_plus_trial') { T.plusTrial = true; go('plusStarted', {}, { push: false }); }
+  else go('checkout', {}, { push: false });
+}
+// TASK 05 Forced Action
+function actShareChoice({ c }) {
+  if (!recordDecision(c)) return;
+  if (c === 'share_for_discount') { T.shared = true; go('shareDone', {}, { push: false }); }
+  else go('checkout', {}, { push: false });
+}
+
+// 다크패턴 인지 확인
+function actRecogAnswer({ v }) {
+  recogDraft.yes = v === '1';
+  document.querySelectorAll('[data-act="recogAnswer"]').forEach(b => {
+    const sel = (b.dataset.v === '1') === recogDraft.yes;
+    b.classList.toggle('is-selected', sel);
+    b.setAttribute('aria-pressed', String(sel));
+  });
+  document.getElementById('recogTextWrap').classList.toggle('hidden', !recogDraft.yes);
+  document.getElementById('recogError').textContent = '';
+}
+function actRecogNext() {
+  if (recogDraft.yes === null) {
+    document.getElementById('recogError').textContent = '‘있었다’ 또는 ‘없었다’를 선택해 주세요.';
+    return;
+  }
+  const a = session.assignment[session.recogIndex];
+  session.recognition[a.taskId] = {
+    recognitionYesNo: recogDraft.yes ? 1 : 0,
+    recognitionText: recogDraft.yes ? recogDraft.text.trim() : '',
+    recognitionAnsweredAt: iso(),
+  };
+  session.recogIndex++;
+  session.updatedAt = iso();
+  recogDraft = { yes: null, text: '' };
+  if (session.recogIndex >= session.assignment.length) {
+    session.phase = 'done';
+    session.completedAt = iso();
+    saveStore();
+    releaseWakeLock();
+    go('end', {}, { push: false });
+  } else {
+    saveStore();
+    go('recog', {}, { push: false });
+  }
+}
+
+// 경고 테스트 (디버그 시작 화면 / 연구자 모드)
+function actTestWarning({ cond }) {
+  ensureAudio();
+  showModal({ title: `경고 테스트: ${cond}`, body: '<div class="warning-slot" id="warningSlot"></div><p id="testResult"></p>', actions: [{ label: '닫기', primary: true }] });
+  const r = triggerWarning(cond);
+  document.getElementById('testResult').textContent =
+    `시각 ${r.visualShown ? 'O' : '-'} · 소리 ${r.audioTriggered ? 'O' : '-'} (${r.audioState}) · 진동 ${r.hapticTriggered ? 'O' : '-'}${r.hapticError ? ` (${r.hapticError})` : ''}`;
+}
+
+/* ─── 16. 모달 · 토스트 ────────────────────────────────────────── */
+const modalRoot = document.getElementById('modalRoot');
+function showModal({ title, body, actions = [] }) {
+  modalRoot.innerHTML = `<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true">
+    <h2 class="modal-title">${title}</h2><div class="modal-body">${body}</div>
+    <div class="modal-actions">${actions.map((a, i) => `<button class="btn ${a.primary ? 'btn-primary' : 'btn-secondary'}" data-modal="${i}">${a.label}</button>`).join('')}</div>
+  </div></div>`;
+  modalRoot.querySelectorAll('[data-modal]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const a = actions[Number(btn.dataset.modal)];
+      closeModal();
+      if (a && a.onClick) a.onClick();
+    });
+  });
+}
+function closeModal() { modalRoot.innerHTML = ''; }
+let toastTimer = null;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2000);
+}
+
+/* ─── 17. 기기 보조 기능 (뒤로가기 방지, 화면 꺼짐 방지, 전체화면) ──── */
+function setupBackTrap() {
+  history.replaceState({ moa: 'base' }, '');
+  history.pushState({ moa: 'trap' }, '');
+  window.addEventListener('popstate', () => {
+    history.pushState({ moa: 'trap' }, '');
+    if (modalRoot.innerHTML) { closeModal(); return; }
+    if (T) logEvent('hardware_back', { from: view.name });
+    if (canGoBack()) goBack();
+  });
+}
+async function requestWakeLock() {
+  try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { /* 지원 안 함 */ }
+}
+function releaseWakeLock() { try { if (wakeLock) wakeLock.release(); } catch (e) { /* noop */ } wakeLock = null; }
+function maybeFullscreen() {
+  if (!REQUEST_FULLSCREEN_ON_START || DEBUG) return;
+  if (!window.matchMedia('(pointer: coarse)').matches) return;
+  const el = document.documentElement;
+  if (el.requestFullscreen && !document.fullscreenElement) el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+}
+
+/* ─── 18. 디버그 패널 (?debug=1) ───────────────────────────────── */
+let dbgOpen = true;
+function debugUpdate() {
+  if (!DEBUG) return;
+  const el = document.getElementById('debugPanel');
+  const d = T && T.decision;
+  const f = n => (typeof n === 'number' ? n.toFixed(1) + ' ms' : '-');
+  el.innerHTML = `<button class="dbg-toggle" data-dbg="toggle">DEBUG ${dbgOpen ? '▾' : '▸'}</button>${dbgOpen ? `<div class="dbg-body">
+    <div>참가자 <b>${session ? session.participantId : '-'}</b> · ${session ? session.phase : '-'} · 화면 <b>${view.name}</b></div>
+    <div>Task <b>${T ? `${T.order}/5 ${T.taskId} ${TASK_TYPES[T.taskId]}` : '-'}</b></div>
+    <div>Condition <b>${T ? `${T.condition} (${CONDITION_SPEC[T.condition].label})` : '-'}</b></div>
+    <div>AudioContext <b>${audioCtx ? audioCtx.state : '미생성'}</b> · 진동 <b>${HAPTIC_METHOD_LABEL}</b></div>
+    <div>T0 <b>${f(d && d.t0)}</b> · T1 <b>${f(d && d.t1)}</b></div>
+    <div>RT <b>${d && d.responseTimeMs != null ? `${d.responseTimeMs} ms (${(d.responseTimeMs / 1000).toFixed(2)} s)` : '-'}</b></div>
+    <div>경고 실행 ${d ? `V:<b>${d.visualShown ? 1 : 0}</b> A:<b>${d.audioTriggered ? 1 : 0}</b>(${d.audioState}) H:<b>${d.hapticTriggered ? 1 : 0}</b>${d.hapticError ? ' ' + d.hapticError : ''}` : '-'}</div>
+    ${T && T.taskId === 'S' ? `<div>안심배송 ${T.addon ? 'ON' : 'OFF'} · 조작 ${T.addonToggleCount}회</div>` : ''}
+    <details><summary>마지막 저장 로그</summary><pre>${esc(lastSavedRow ? JSON.stringify({ ...lastSavedRow, events: lastSavedRow.events.length + ' events' }, null, 1) : '-')}</pre></details>
+    <details><summary>현재 이벤트 로그</summary><pre>${esc(T ? JSON.stringify(T.events.slice(-12), null, 1) : '-')}</pre></details>
+    <div><a href="?researcher=1" target="_blank">연구자 모드</a></div>
+  </div>` : ''}`;
+}
+
+/* ─── 19. 연구자 모드 (?researcher=1) ──────────────────────────── */
+const CSV_COLUMNS = [
+  'participantId', 'sessionMode', 'status', 'taskOrder', 'taskId', 'taskType', 'condition',
+  'choice', 'resistance', 'responseTimeMs', 'responseTimeSec', 'taskSuccess',
+  'visualShown', 'audioTriggered', 'audioContextState', 'hapticSupported', 'hapticMethod', 'hapticTriggered', 'hapticError',
+  'optionChanged', 'optionChangeTime', 'optionToggleCount', 'finalOptionSelected', 'paidAmount',
+  'finalCancellationCompleted', 'finalChoice', 'budsSelected', 'orderItems',
+  'recognitionYesNo', 'recognitionText', 'attempts',
+  't0Ms', 't1Ms', 'decisionShownAt', 'decisionMadeAt', 'taskStartedAt', 'timestamp',
+  'userAgent', 'screenWidth', 'screenHeight', 'events',
+];
+function sortedParticipants() {
+  return Object.values(store.participants).sort((a, b) => a.participantId.localeCompare(b.participantId));
+}
+function buildExportRows() {
+  const out = [];
+  for (const p of sortedParticipants()) {
+    p.assignment.forEach((a, i) => {
+      const r = p.results[a.taskId];
+      const rec = p.recognition[a.taskId] || {};
+      const row = r ? { ...r } : {
+        participantId: p.participantId, sessionMode: p.mode, taskOrder: i + 1, taskId: a.taskId,
+        taskType: TASK_TYPES[a.taskId], condition: a.condition,
+        userAgent: p.device && p.device.userAgent, screenWidth: p.device && p.device.screenWidth, screenHeight: p.device && p.device.screenHeight,
+      };
+      row.status = r ? 'completed' : 'not_completed';
+      row.recognitionYesNo = rec.recognitionYesNo ?? '';
+      row.recognitionText = rec.recognitionText ?? '';
+      row.attempts = p.attempts[a.taskId] || 0;
+      out.push(row);
+    });
+  }
+  return out;
+}
+function csvCell(v) {
+  if (v === null || v === undefined) return '';
+  let s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+  if (/^[=+@]/.test(s)) s = "'" + s;               // 스프레드시트 수식 주입 방지
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function toCSV(rows) {
+  return [CSV_COLUMNS.join(','), ...rows.map(r => CSV_COLUMNS.map(c => csvCell(r[c])).join(','))].join('\r\n');
+}
+function download(name, text, type) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+const median = arr => {
+  if (!arr.length) return null;
+  const s = [...arr].sort((a, b) => a - b), m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+function summaryTable(rows, key, order) {
+  const done = rows.filter(r => r.status === 'completed');
+  const groups = order.map(k => {
+    const g = done.filter(r => r[key] === k);
+    const res = g.filter(r => r.resistance === 0 || r.resistance === 1);
+    const rts = g.map(r => r.responseTimeMs).filter(v => typeof v === 'number');
+    const rec = g.filter(r => r.recognitionYesNo === 0 || r.recognitionYesNo === 1);
+    const pct = (a, b) => (b ? Math.round((a / b) * 100) + '%' : '-');
+    const med = median(rts);
+    return `<tr><td>${k}</td><td>${g.length}</td><td>${pct(res.filter(r => r.resistance === 1).length, res.length)}</td>
+      <td>${med != null ? (med / 1000).toFixed(2) + ' s' : '-'}</td><td>${pct(rec.filter(r => r.recognitionYesNo === 1).length, rec.length)}</td></tr>`;
+  }).join('');
+  return `<div class="table-wrap"><table class="r-table"><thead><tr><th>${key}</th><th>n</th><th>저항률</th><th>RT 중앙값</th><th>‘있었다’ 응답률</th></tr></thead><tbody>${groups}</tbody></table></div>
+    <p class="r-meta">‘있었다’ 응답률은 자기보고 값이며, 최종 인지 코딩(0/1)은 연구자가 서술 내용을 보고 별도로 수행합니다.</p>`;
+}
+function participantSection(p) {
+  const done = Object.keys(p.results).length;
+  const status = p.phase === 'done' ? '<span class="tag tag-ok">완료</span>'
+    : p.phase === 'recognition' ? `<span class="tag">인지 확인 ${p.recogIndex}/5</span>` : `<span class="tag">과제 ${done}/5</span>`;
+  const rows = p.assignment.map((a, i) => {
+    const r = p.results[a.taskId];
+    const rec = p.recognition[a.taskId] || {};
+    const spec = CONDITION_SPEC[a.condition];
+    if (!r) return `<tr><td>${i + 1}</td><td>${a.taskId} ${TASK_TYPES[a.taskId]}</td><td>${a.condition}</td><td colspan="9" class="na">미완료</td><td>${p.attempts[a.taskId] || 0}</td></tr>`;
+    const audioBad = spec.audio !== !!r.audioTriggered;
+    const hapticBad = spec.haptic !== !!r.hapticTriggered;
+    return `<tr><td>${i + 1}</td><td>${a.taskId} ${TASK_TYPES[a.taskId]}</td><td>${a.condition}</td><td>${esc(r.choice)}</td>
+      <td><b>${r.resistance}</b></td><td>${r.responseTimeMs}</td><td>${r.responseTimeSec}</td><td>${r.taskSuccess}</td>
+      <td class="${audioBad ? 'bad' : ''}">${r.audioTriggered}</td><td class="${hapticBad ? 'bad' : ''}">${r.hapticTriggered}</td>
+      <td>${rec.recognitionYesNo ?? '-'}</td><td class="wrap">${esc(rec.recognitionText || '')}</td><td>${p.attempts[a.taskId] || 0}</td></tr>`;
+  }).join('');
+  const dev = p.device || {};
+  return `<section class="r-card">
+    <div class="r-p-head"><h2 style="margin:0">${p.participantId}</h2>${status}${p.mode === 'debug' ? '<span class="tag tag-warn">DEBUG</span>' : ''}
+      <button class="btn-small danger" data-act="rDeleteOne" data-id="${p.participantId}">이 참가자 삭제</button></div>
+    <p class="r-meta">시작 ${new Date(p.createdAt).toLocaleString('ko-KR')} · 화면 ${dev.screenWidth}×${dev.screenHeight} · 진동 ${dev.hapticMethod || (dev.hapticSupported ? 'vibrate' : '미지원')}</p>
+    <div class="table-wrap"><table class="r-table"><thead><tr><th>#</th><th>Task</th><th>Condition</th><th>Choice</th><th>Resist.</th><th>RT ms</th><th>RT s</th><th>Success</th><th>Audio</th><th>Haptic</th><th>인지</th><th>인지 서술</th><th>시도</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>
+  </section>`;
+}
+function renderResearcher() {
+  document.title = 'MOA 실험 · 연구자 모드';
+  const parts = sortedParticipants();
+  const rows = buildExportRows();
+  const v = validateAssignments();
+  appEl.innerHTML = `<main class="researcher">
+    <header class="r-head"><h1>연구자 모드</h1><p>참가자 ${parts.length}명 · 완료된 과제 기록 ${rows.filter(r => r.status === 'completed').length}건 · 저장 위치: 이 기기 브라우저(localStorage)</p></header>
+    <section class="r-actions">
+      <button class="btn btn-primary" data-act="rCsv">CSV 다운로드</button>
+      <button class="btn btn-secondary" data-act="rJson">JSON 백업 다운로드</button>
+      <label class="btn btn-secondary file-btn">JSON 불러오기<input type="file" accept="application/json,.json" id="importFile" hidden></label>
+      ${CAN_SHARE_FILES ? '<button class="btn btn-secondary" data-act="rShareCsv">CSV 공유 (AirDrop·메일)</button>' : ''}
+      <button class="btn btn-secondary" data-act="rRefresh">새로고침</button>
+      <a class="btn btn-secondary" href="${location.pathname}">참가자 화면으로</a>
+    </section>
+    <section class="r-card r-device"><h2>기기 점검</h2>
+      <p>진동 방식: <b>${HAPTIC_SUPPORTED ? HAPTIC_METHOD_LABEL : '미지원 — ' + esc(HAPTIC_UNSUPPORTED_MESSAGE)}</b></p>
+      <p>경고음: ${WARNING_AUDIO_WAVEFORM} ${WARNING_AUDIO_FREQUENCY}Hz · ${WARNING_AUDIO_DURATION}ms · gain ${WARNING_AUDIO_GAIN} /
+        진동: ${HAPTIC_METHOD === 'ios-switch' ? `iPhone 햅틱 ${WARNING_HAPTIC_IOS_TAPS.length}회 [${WARNING_HAPTIC_IOS_TAPS.join(', ')}]ms` : `패턴 [${WARNING_HAPTIC_PATTERN.join(', ')}]`}</p>
+      ${IS_IOS ? '<p class="r-meta">iPhone 확인: 설정 › 사운드 및 햅틱 › 시스템 햅틱 켜기 · 저전력 모드 끄기 · 미디어 볼륨 올리기</p>' : ''}
+      <div class="r-test">${CONDITIONS.map(c => `<button class="btn btn-secondary" data-act="testWarning" data-cond="${c}">${c} 테스트</button>`).join('')}</div>
+    </section>
+    <section class="r-card"><h2>조건별 요약</h2>${summaryTable(rows, 'condition', CONDITIONS)}</section>
+    <section class="r-card"><h2>다크패턴 유형별 요약</h2>${summaryTable(rows, 'taskType', TASK_IDS.map(t => TASK_TYPES[t]))}</section>
+    ${parts.map(participantSection).join('') || '<section class="r-card"><p>저장된 데이터가 없습니다.</p></section>'}
+    <section class="r-card"><h2>배정표 검증 ${v.allOk ? '<span class="tag tag-ok">정상</span>' : '<span class="tag tag-warn">오류</span>'}</h2>
+      <div class="table-wrap"><table class="r-table"><thead><tr><th>ID</th><th>순서 (Task-Condition)</th><th>검증</th></tr></thead><tbody>
+      ${v.participants.map(r => `<tr><td>${r.pid}</td><td>${r.sequence}</td><td>${r.ok ? '✓ 과제·조건 각 1회' : esc(r.issues.join(', '))}</td></tr>`).join('')}
+      </tbody></table></div>
+      <p class="r-meta">${REUSE_ASSIGNMENT_FOR_P11_TO_P20 ? 'P11~P20은 P01~P10과 같은 배정을 사용합니다.' : ''}</p>
+    </section>
+    <section class="r-card danger"><h2>데이터 삭제</h2><p class="r-meta">삭제 전에 CSV와 JSON 백업을 먼저 받아 두세요.</p>
+      <button class="btn btn-danger" style="width:auto" data-act="rWipe">전체 데이터 삭제</button></section>
+  </main>`;
+}
+function rCsv() {
+  const rows = buildExportRows();
+  if (!rows.length) { alert('저장된 데이터가 없습니다.'); return; }
+  download(`moa_experiment_${stamp()}.csv`, '\uFEFF' + toCSV(rows), 'text/csv;charset=utf-8');
+}
+// iPhone: 공유 시트로 AirDrop / 메일 / 파일 앱 저장
+function rShareCsv() {
+  const rows = buildExportRows();
+  if (!rows.length) { alert('저장된 데이터가 없습니다.'); return; }
+  const file = new File(['﻿' + toCSV(rows)], `moa_experiment_${stamp()}.csv`, { type: 'text/csv' });
+  navigator.share({ files: [file], title: 'MOA 실험 데이터' }).catch(err => {
+    if (err && err.name !== 'AbortError') alert('공유 실패: ' + err.message + '\nCSV 다운로드를 이용해 주세요.');
+  });
+}
+function rJson() {
+  download(`moa_experiment_backup_${stamp()}.json`, JSON.stringify({ ...store, exportedAt: iso() }, null, 2), 'application/json');
+}
+function rDeleteOne({ id }) {
+  if (!confirm(`${id}의 기록을 삭제할까요?`)) return;
+  if (!confirm(`정말 삭제합니까? ${id}의 기록은 되돌릴 수 없습니다.`)) return;
+  delete store.participants[id];
+  saveStore(); renderResearcher();
+}
+function rWipe() {
+  if (!confirm('저장된 모든 실험 데이터를 삭제할까요?')) return;
+  if (!confirm('마지막 확인: 전체 데이터를 영구 삭제합니다. CSV/JSON 백업을 받았나요? 삭제하려면 확인을 누르세요.')) return;
+  store.participants = {};
+  saveStore(); renderResearcher();
+}
+function rImport(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const d = JSON.parse(reader.result);
+      if (!d || typeof d.participants !== 'object') throw new Error('형식이 올바르지 않습니다.');
+      const ids = Object.keys(d.participants);
+      const dup = ids.filter(id => store.participants[id]);
+      if (!confirm(`${ids.length}명의 기록을 불러옵니다.${dup.length ? `\n같은 ID(${dup.join(', ')})는 파일 내용으로 덮어씁니다.` : ''}\n계속할까요?`)) return;
+      Object.assign(store.participants, d.participants);
+      saveStore(); renderResearcher();
+    } catch (err) { alert('불러오기 실패: ' + err.message); }
+  };
+  reader.readAsText(file);
+}
+
+/* ─── 20. 이벤트 연결 · 시작 ───────────────────────────────────── */
+const ACTIONS = {
+  beginTask: actBeginTask, afterTask: actAfterTask,
+  startRecognition: () => { recogDraft = { yes: null, text: '' }; go('recog', {}, { push: false }); },
+  recogAnswer: actRecogAnswer, recogNext: actRecogNext,
+  openInstruction: actOpenInstruction, testWarning: actTestWarning,
+  go: d => go(d.to, d.id ? { id: d.id } : {}),
+  tab: d => { navStack = []; go(d.to, {}, { push: false }); },
+  back: () => { if (canGoBack()) goBack(); },
+  openProduct: actOpenProduct, closeNagFirst: actCloseNagFirst,
+  addToCart: actAddToCart, buyNow: actBuyNow, orderFromCart: actOrderFromCart,
+  nagChoice: actNagChoice, toggleAddon: actToggleAddon, pay: actPay, orderDoneOk: actOrderDoneOk,
+  startCancel: actStartCancel, retentionChoice: actRetentionChoice, finalCancel: actFinalCancel,
+  toTaskDone: () => { if (T) endTaskView(); },
+  plusOfferChoice: actPlusOfferChoice, shareChoice: actShareChoice,
+  continueToCheckout: () => go('checkout', {}, { push: false }),
+  unavailable: d => { showToast('현재 이용할 수 없는 메뉴입니다.'); logEvent('unavailable_menu', { label: d.label }); },
+  rCsv, rShareCsv, rJson, rDeleteOne, rWipe, rRefresh: () => renderResearcher(),
+  logoTap: actLogoTap,
+};
+
+document.addEventListener('click', e => {
+  const dbg = e.target.closest('[data-dbg]');
+  if (dbg) { dbgOpen = !dbgOpen; debugUpdate(); return; }
+  const el = e.target.closest('[data-act]');
+  if (!el || el.disabled || el.closest('.preview-frame')) return;
+  const fn = ACTIONS[el.dataset.act];
+  if (!fn) return;
+  e.preventDefault();
+  if (!RESEARCHER && performance.now() - lastRenderAt < DOUBLE_TAP_GUARD_MS) {
+    if (T) logEvent('tap_ignored_too_fast', { act: el.dataset.act });
+    return;
+  }
+  fn({ ...el.dataset }, el);
+});
+document.addEventListener('submit', e => {
+  if (e.target.id === 'startForm') { e.preventDefault(); actStart(); }
+});
+document.addEventListener('input', e => {
+  if (e.target.id === 'recogText') recogDraft.text = e.target.value;
+  if (e.target.id === 'pid') startDraft = e.target.value;
+});
+document.addEventListener('change', e => {
+  if (e.target.id === 'importFile') rImport(e.target.files[0]);
+});
+document.addEventListener('visibilitychange', () => {
+  if (T) logEvent('visibility', { state: document.visibilityState });
+  if (document.visibilityState === 'visible' && session && session.phase !== 'done') requestWakeLock();
+});
+window.addEventListener('beforeunload', e => {
+  if (!RESEARCHER && !DEBUG && session && session.phase !== 'done') { e.preventDefault(); e.returnValue = ''; }
+});
+
+// 콘솔 확인용
+window.MOA = {
+  store, ASSIGNMENTS, CONDITION_SPEC, validateAssignments, buildExportRows, toCSV, triggerWarning,
+  state: () => ({ view: view.name, participant: session && session.participantId, task: T && { taskId: T.taskId, condition: T.condition, order: T.order, decision: T.decision } }),
+};
+
+// 주소창을 쓸 수 없을 때(iPhone 홈 화면 앱 등): 시작 화면 로고를 3초 안에 5번 터치 → 연구자 모드
+let logoTaps = [];
+function actLogoTap() {
+  const now = performance.now();
+  logoTaps = logoTaps.filter(t => now - t < 3000);
+  logoTaps.push(now);
+  if (logoTaps.length >= 5) location.href = location.pathname + '?researcher=1';
+}
+
+function init() {
+  if (RESEARCHER) { document.body.classList.add('is-researcher'); renderResearcher(); setupIosHaptic(); return; }
+  setupIosHaptic();
+  setupBackTrap();
+  if (DEBUG) {
+    document.body.classList.add('is-debug');
+    const v = validateAssignments();
+    console.info('[MOA] 배정표 검증', v.allOk ? '정상' : '오류', v);
+  }
+  go('start', {}, { push: false });
+}
+init();

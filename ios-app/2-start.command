@@ -19,6 +19,19 @@ echo "=============================================="
 echo "   MOA 실험 앱 시작"
 echo "=============================================="
 echo
+
+# Expo 계정 로그인 확인 (iPhone Expo Go에도 같은 계정으로 로그인해야 앱이 열림)
+if ! npx --yes expo whoami >/dev/null 2>&1; then
+  echo "Expo 계정 로그인이 필요합니다 (처음 한 번만)."
+  echo "계정이 없다면 https://expo.dev/signup 에서 무료로 만든 뒤 아래에 입력하세요."
+  echo "iPhone의 Expo Go 앱에도 같은 계정으로 로그인해 주세요."
+  echo
+  npx --yes expo login || { echo "로그인에 실패했습니다. 창을 닫고 다시 실행해 주세요."; read -n 1 -s -r; exit 1; }
+  echo
+fi
+echo "✔ Expo 로그인: $(npx --yes expo whoami 2>/dev/null)"
+echo
+
 echo "iPhone과 이 Mac이 같은 Wi-Fi인가요?"
 echo "  · 같은 Wi-Fi  → 그냥 Enter"
 echo "  · 다른 Wi-Fi, 또는 지난번에 QR로 연결이 안 됐다면 → t 입력 후 Enter"

@@ -71,6 +71,9 @@ if [ -f "$HERE/2-start.command" ]; then
   cp "$HERE/2-start.command" "$HOME/Desktop/MOA 실험 시작.command" 2>/dev/null && \
     chmod +x "$HOME/Desktop/MOA 실험 시작.command" 2>/dev/null
 fi
+# 인터넷에서 받은 파일 표시(격리 속성)를 지워, 다음부터 더블클릭 시 경고 없이 열리게 함
+xattr -dr com.apple.quarantine "$HERE" 2>/dev/null || true
+xattr -d com.apple.quarantine "$HOME/Desktop/MOA 실험 시작.command" 2>/dev/null || true
 
 echo
 echo "=============================================="

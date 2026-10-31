@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>진동 진단 5</title>
+<style>
+  :root { --brand: #0F6B5C; --muted: #5F6873; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #F3F4F6; color: #16191D; font: 18px/1.55 system-ui, -apple-system, "Apple SD Gothic Neo", sans-serif; word-break: keep-all; }
+  main { max-width: 480px; margin: 0 auto; padding: 20px 16px 60px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 0 0 4px; }
+  .card { background: #fff; border: 1px solid #E4E7EB; border-radius: 14px; padding: 16px; margin-top: 14px; }
+  .muted { color: var(--muted); font-size: 16px; }
+  button.t { display: block; width: 100%; min-height: 58px; margin-top: 10px; border: 0; border-radius: 12px;
+    background: var(--brand); color: #fff; font: inherit; font-weight: 700; touch-action: manipulation; }
+  .count { font-size: 15px; color: var(--muted); margin-top: 6px; }
+  .rel { position: relative; height: 40px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>진동 진단 5</h1>
+  <p class="muted">1번부터 순서대로, 한 번씩만 누르고 1초쯤 기다렸다 다음으로 넘어가 주세요. 1~7번 O/X를 알려 주세요.</p>
+
+  <section class="card"><h2>1. 2차 H와 완전히 같은 스위치</h2>
+    <label id="S1" style="display:flex;align-items:center;gap:12px;font-weight:700;margin-top:6px"><input type="checkbox" switch> 보이는 스위치</label>
+    <button class="t" data-test="S1">1번 테스트</button><div class="count" id="cS1"></div></section>
+
+  <section class="card"><h2>2. 1번 + 포커스 제외(tabindex=-1)</h2>
+    <label id="S2" style="display:flex;align-items:center;gap:12px;font-weight:700;margin-top:6px"><input type="checkbox" switch tabindex="-1"> 보이는 스위치</label>
+    <button class="t" data-test="S2">2번 테스트</button><div class="count" id="cS2"></div></section>
+
+  <section class="card"><h2>3. 1번 + 화면낭독 제외(aria-hidden)</h2>
+    <label id="S3" aria-hidden="true" style="display:flex;align-items:center;gap:12px;font-weight:700;margin-top:6px"><input type="checkbox" switch> 보이는 스위치</label>
+    <button class="t" data-test="S3">3번 테스트</button><div class="count" id="cS3"></div></section>
+
+  <section class="card"><h2>4. 1번에서 글자만 뺌</h2>
+    <label id="S4" style="display:flex;align-items:center;gap:12px;font-weight:700;margin-top:6px"><input type="checkbox" switch></label>
+    <button class="t" data-test="S4">4번 테스트</button><div class="count" id="cS4"></div></section>
+
+  <section class="card"><h2>5. 1번 + 위치 지정(absolute)</h2>
+    <div class="rel"><label id="S5" style="position:absolute;left:0;top:0;display:flex;align-items:center;gap:12px;font-weight:700"><input type="checkbox" switch> 보이는 스위치</label></div>
+    <button class="t" data-test="S5">5번 테스트</button><div class="count" id="cS5"></div></section>
+
+  <section class="card"><h2>6. 1번 + 투명도 1%</h2>
+    <label id="S6" style="opacity:0.01;display:flex;align-items:center;gap:12px;font-weight:700;margin-top:6px"><input type="checkbox" switch> 보이는 스위치</label>
+    <button class="t" data-test="S6">6번 테스트</button><div class="count" id="cS6"></div></section>
+
+  <section class="card"><h2>7. 1번 스위치 자체(input)를 직접 누름</h2>
+    <label style="display:flex;align-items:center;gap:12px;font-weight:700;margin-top:6px"><input type="checkbox" switch id="S7"> 보이는 스위치</label>
+    <button class="t" data-test="S7">7번 테스트</button><div class="count" id="cS7"></div></section>
+</main>
+
+<script>
+  const counts = {};
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-test]');
+    if (!b) return;
+    const k = b.dataset.test;
+    document.getElementById(k).click();
+    counts[k] = (counts[k] || 0) + 1;
+    document.getElementById('c' + k).textContent = `실행 ${counts[k]}회`;
+  });
+</script>
+</body>
+</html>

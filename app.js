@@ -1695,6 +1695,7 @@ function actSurveyPick(d, el) {
 /* ── 인터뷰: 녹음 ───────────────────────────────────────────── */
 const AUDIO_DB = 'MOAExperimentAudio', AUDIO_STORE = 'recordings';
 let micPermission = 'unknown';              // unknown | granted | denied
+let micErrorCode = '';                       // 연구자 확인용 원인 코드
 let rec = { status: 'idle', qid: null };    // idle | starting | recording | stopping
 let recTimer = null;
 let playingAudio = null;
@@ -1761,12 +1762,17 @@ function handleInterviewNative(msg) {
 }
 
 async function requestMicPermission() {
+  micErrorCode = '';
   if (NATIVE_APP) {
     const r = await nativeAudioRequest({ type: 'interviewMicPermission' });
     micPermission = r.ok && r.granted ? 'granted' : 'denied';
+    if (micPermission !== 'granted') {
+      // app_timeout: Mac의 App.js가 녹음 기능이 없는 예전 파일 / mic_denied: iPhone 설정에서 마이크 거부 / 그 외: 앱 오류 내용
+      micErrorCode = !r.ok ? (r.error || 'app_error') : 'mic_denied';
+    }
     return micPermission === 'granted';
   }
-  if (!MEDIA_RECORDER_SUPPORTED) { micPermission = 'denied'; return false; }
+  if (!MEDIA_RECORDER_SUPPORTED) { micPermission = 'denied'; micErrorCode = 'recorder_unsupported'; return false; }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach(t => t.stop());
@@ -1774,6 +1780,7 @@ async function requestMicPermission() {
     return true;
   } catch (e) {
     micPermission = 'denied';
+    micErrorCode = (e && e.name) || 'mic_denied';
     return false;
   }
 }
@@ -1904,6 +1911,7 @@ function screenInterviewIntro() {
     <p class="intro-sub" style="margin:12px 0 0">화면에 질문이 하나씩 나타납니다.<br>질문을 읽은 뒤 녹음 버튼을 누르고 편하게 말씀해 주세요.</p>
     <p class="intro-sub" style="margin:12px 0 24px">녹음된 답변은 연구 분석 목적으로만 사용됩니다.</p>
     <p class="form-error" id="micError" role="alert"></p>
+    <p class="mic-code" id="micCode"></p>
     <button class="btn btn-primary btn-xl" data-act="interviewStart">마이크 허용 및 인터뷰 시작</button>
   </div></main>`;
 }
@@ -1917,6 +1925,9 @@ async function actInterviewStart(d, el) {
   if (!ok) {
     const err = document.getElementById('micError');
     if (err) err.textContent = MIC_UNAVAILABLE_MESSAGE;
+    const code = document.getElementById('micCode');
+    if (code) code.textContent = micErrorCode ? `(원인 코드: ${micErrorCode})` : '';
+    if (session) { session.sessionEvents.push({ type: 'mic_unavailable', code: micErrorCode, at: iso() }); saveStore(); }
     if (el) el.disabled = false;
     debugUpdate();
     return;
@@ -2023,7 +2034,7 @@ function debugSurveyHTML() {
       <button data-act="dbgGoPost">사후설문</button><button data-act="dbgFillPost">사후 자동입력</button>
       <button data-act="dbgGoInterview">인터뷰</button>
     </div>
-    <div>마이크 권한 <b>${micPermission}</b> · 녹음 방식 <b>${NATIVE_APP ? 'iPhone 앱(native)' : MEDIA_RECORDER_SUPPORTED ? `MediaRecorder (${pickRecorderMime() || '기본'})` : '미지원'}</b></div>
+    <div>마이크 권한 <b>${micPermission}</b>${micErrorCode ? ` (${esc(micErrorCode)})` : ''} · 녹음 방식 <b>${NATIVE_APP ? 'iPhone 앱(native)' : MEDIA_RECORDER_SUPPORTED ? `MediaRecorder (${pickRecorderMime() || '기본'})` : '미지원'}</b></div>
     <div>녹음 상태 <b>${rec.status}</b> · 현재 녹음 시간 <b>${recDur}</b></div>
     <details><summary>저장된 audio metadata</summary><pre>${esc(session ? JSON.stringify(session.interview, null, 1) : '-')}</pre></details>
   </div>`;

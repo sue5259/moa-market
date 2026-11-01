@@ -441,3 +441,4 @@ body.is-researcher #app { max-width: 1200px; background: #F6F7F9; }
 /* 디버그 패널의 글자 영역은 터치를 아래 화면으로 통과시킴 (버튼·접기만 누를 수 있음) */
 #debugPanel, .dbg-body { pointer-events: none; }
 .dbg-toggle, .dbg-body button, .dbg-body summary, .dbg-body a, .dbg-body details[open] pre { pointer-events: auto; }
+.mic-code { margin: -4px 0 12px; text-align: center; font-size: 16px; color: var(--muted); }

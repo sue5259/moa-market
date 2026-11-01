@@ -12,7 +12,9 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="MOA Market">
   <title>MOA Market</title>
-  <link rel="stylesheet" href="styles.css">
+  <!-- 항상 최신 파일을 받도록 주소 뒤에 시각을 붙여 불러옴 (캐시 무시) -->
+  <script>document.write('<link rel="stylesheet" href="styles.css?v=' + Date.now() + '">');</script>
+  <noscript><link rel="stylesheet" href="styles.css"></noscript>
 </head>
 <body>
   <div id="app"></div>
@@ -20,6 +22,6 @@
   <div id="warningRoot"></div>
   <div id="toast" role="status" aria-live="polite"></div>
   <div id="debugPanel"></div>
-  <script src="app.js"></script>
+  <script>document.write('<script src="app.js?v=' + Date.now() + '"><\/script>');</script>
 </body>
 </html>

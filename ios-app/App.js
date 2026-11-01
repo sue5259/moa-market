@@ -55,6 +55,8 @@ function Shell() {
   const webRef = useRef(null);
   const [failed, setFailed] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  // 앱을 열 때마다 주소 뒤에 시각을 붙여 항상 최신 실험 페이지를 받음 (저장된 데이터에는 영향 없음)
+  const [pageUrl, setPageUrl] = useState(() => `${APP_URL}?v=${Date.now()}`);
 
   // 옆면 무음 스위치가 켜져 있어도 경고음이 나도록 오디오 모드 설정
   useEffect(() => {
@@ -119,7 +121,7 @@ function Shell() {
       <SafeAreaView style={styles.center}>
         <Text style={styles.errTitle}>실험 페이지를 불러오지 못했습니다</Text>
         <Text style={styles.errText}>인터넷 연결을 확인한 뒤 다시 시도해 주세요.</Text>
-        <Pressable style={styles.retry} onPress={() => { setFailed(false); setReloadKey(k => k + 1); }}>
+        <Pressable style={styles.retry} onPress={() => { setFailed(false); setPageUrl(`${APP_URL}?v=${Date.now()}`); setReloadKey(k => k + 1); }}>
           <Text style={styles.retryText}>다시 시도</Text>
         </Pressable>
       </SafeAreaView>
@@ -132,7 +134,7 @@ function Shell() {
       <WebView
         key={reloadKey}
         ref={webRef}
-        source={{ uri: APP_URL }}
+        source={{ uri: pageUrl }}
         injectedJavaScriptBeforeContentLoaded={INJECT_BEFORE_LOAD}
         onMessage={onMessage}
         onShouldStartLoadWithRequest={onShouldStart}

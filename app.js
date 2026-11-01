@@ -54,6 +54,8 @@ const COMMON_INTRO_TEXT = '실제 앱을 사용하는 것처럼, 평소라면 �
 
 // 과제별 대상 상품 (O는 구매 과제 아님). 대상 상품은 해당 과제에서 구매 가능 상태가 됨
 const TASK_PRODUCT = { N: 'tumbler', S: 'tumbler', I: 'mug', F: 'tote' };
+// 과제별 시작 화면 (지정하지 않은 과제는 홈)
+const TASK_START_SCREEN = { O: 'my', F: 'cart' };
 
 const PRICE = { tumbler: 29000, addon: 2900, budget: 29000, plusDiscount: 5000, shareDiscount: 5000 };
 
@@ -72,11 +74,11 @@ const TASK_IDS = Object.keys(TASK_TYPES);
 
 // 참가자에게 보이는 과제 문구 (다크패턴이라는 표현 없음)
 const TASK_TEXT = {
-  N: { instruction: '데일리 텀블러를 찾아 구매를 진행해 주세요.' },
-  O: { instruction: '현재 이용 중인 MOA Plus 멤버십 이용을 종료해 주세요.' },
-  S: { instruction: '예산 29,000원으로 데일리 텀블러 1개를 구매해 주세요.' },
-  I: { instruction: '현재 다른 멤버십 서비스를 이용하고 있는 상황입니다. 스톤 머그컵 1개를 구매해 주세요.' },
-  F: { instruction: '장바구니에 캔버스 토트백 1개가 담겨 있습니다. 구매를 완료해 주세요.' },
+  N: { instruction: '데일리 텀블러를 구매하려고 하는 상황입니다. 구매를 진행해 주세요.' },
+  O: { instruction: '현재 이용 중인 MOA Plus 멤버십을 종료하려고 하는 상황입니다. 멤버십 종료를 진행해 주세요.' },
+  S: { instruction: '예산 29,000원 안에서 데일리 텀블러 1개를 구매하려고 하는 상황입니다. 구매를 진행해 주세요.' },
+  I: { instruction: '현재 별도의 멤버십 서비스를 이용 중이며, 스톤 머그컵 1개를 구매하려고 하는 상황입니다. 구매를 진행해 주세요.' },
+  F: { instruction: '장바구니에 캔버스 토트백 1개가 담겨 있고, 이 상품을 구매하려고 하는 상황입니다. 구매를 진행해 주세요.' },
 };
 
 // 각 과제에서 경고·T0가 발생하는 핵심 의사결정 화면
@@ -156,8 +158,9 @@ function validateAssignments() {
 const PRODUCTS = {
   tumbler: { id: 'tumbler', name: '데일리 텀블러', desc: '보온·보냉 스테인리스 텀블러 473ml', price: 29000, available: true, art: 'tumbler',
     body: '이중 진공 구조로 따뜻한 음료는 따뜻하게, 차가운 음료는 차갑게 오래 유지됩니다. 뚜껑을 돌려 잠그는 방식이라 가방에 넣어도 새지 않습니다.' },
-  buds: { id: 'buds', name: 'MOA 무선 이어폰', desc: '무선 블루투스 이어폰', price: 89000, salePrice: 62300, sale: 30, available: true, art: 'buds',
-    body: '가볍고 귀에 편안하게 맞는 무선 이어폰입니다. 한 번 충전으로 최대 6시간 사용할 수 있습니다.' },
+  // Nagging 추천 상품 (데일리 텀블러와 비슷한 용도, 용량은 더 작음)
+  slim: { id: 'slim', name: '슬림 텀블러', desc: '보온·보냉 스테인리스 텀블러 350ml', price: 32000, salePrice: 22400, sale: 30, available: true, art: 'slim',
+    body: '얇고 가벼운 스테인리스 텀블러입니다. 따뜻한 음료와 차가운 음료를 모두 담을 수 있고, 작은 가방에도 넣기 편합니다.' },
   mug: { id: 'mug', name: '스톤 머그컵', desc: '도자기 머그컵 350ml', price: 15900, available: false, art: 'mug', body: '두툼한 도자기로 만들어 음료가 쉽게 식지 않습니다. 전자레인지와 식기세척기에 사용할 수 있습니다.' },
   towel: { id: 'towel', name: '소프트 타월 2매', desc: '면 100% 세면 타월', price: 12900, available: false, art: 'towel', body: '부드러운 면 타월 2장 묶음입니다.' },
   tote: { id: 'tote', name: '캔버스 토트백', desc: '두꺼운 면 캔버스 가방', price: 19800, available: false, art: 'tote', body: '두꺼운 면 캔버스로 만들어 튼튼하고, 장보기나 외출할 때 넉넉하게 들 수 있습니다.' },
@@ -539,7 +542,7 @@ const icon = (name, sw = 2) =>
 
 const ART = {
   tumbler: '<rect width="120" height="120" rx="18" fill="#E3F1EE"/><rect x="43" y="19" width="34" height="11" rx="4" fill="#24313B"/><path d="M40 32h40l-5 66a7 7 0 0 1-7 6H52a7 7 0 0 1-7-6z" fill="#0F6B5C"/><rect x="45" y="56" width="30" height="13" rx="3" fill="#fff" opacity=".9"/>',
-  buds: '<rect width="120" height="120" rx="18" fill="#EEF0F7"/><rect x="28" y="62" width="64" height="32" rx="16" fill="#fff" stroke="#C3C9D6" stroke-width="3"/><circle cx="47" cy="44" r="13" fill="#2F3747"/><rect x="43" y="44" width="8" height="26" rx="4" fill="#2F3747"/><circle cx="73" cy="44" r="13" fill="#2F3747"/><rect x="69" y="44" width="8" height="26" rx="4" fill="#2F3747"/>',
+  slim: '<rect width="120" height="120" rx="18" fill="#EEF0F7"/><rect x="47" y="17" width="26" height="10" rx="4" fill="#2F3747"/><path d="M45 29h30l-3 71a6 6 0 0 1-6 5h-12a6 6 0 0 1-6-5z" fill="#6B7A90"/><rect x="50" y="56" width="20" height="11" rx="3" fill="#fff" opacity=".9"/>',
   mug: '<rect width="120" height="120" rx="18" fill="#F6EEE6"/><rect x="32" y="38" width="46" height="52" rx="8" fill="#B5835A"/><path d="M78 50h7a11 11 0 0 1 0 22h-7" fill="none" stroke="#B5835A" stroke-width="7"/>',
   towel: '<rect width="120" height="120" rx="18" fill="#EAF2FB"/><rect x="26" y="34" width="68" height="22" rx="6" fill="#7FA8D8"/><rect x="26" y="62" width="68" height="22" rx="6" fill="#A9C6E8"/>',
   tote: '<rect width="120" height="120" rx="18" fill="#F3F0E6"/><path d="M46 48a14 14 0 0 1 28 0" fill="none" stroke="#8C7A55" stroke-width="5"/><rect x="33" y="48" width="54" height="46" rx="6" fill="#D8CBA8"/>',
@@ -729,7 +732,7 @@ function screenDetail({ id }) {
       ${actions}
     </main>
     ${showNag1 ? `<div class="sheet-backdrop"><div class="sheet" role="dialog" aria-modal="true">
-      <div class="sheet-row">${art('buds')}<p class="sheet-text">${PRODUCTS.buds.name}이 현재 30% 할인 중입니다.</p></div>
+      <div class="sheet-row">${art('slim')}<p class="sheet-text">${PRODUCTS.slim.name}가 현재 30% 할인 중입니다.</p></div>
       <button class="btn btn-primary btn-xl" data-act="closeNagFirst">계속 쇼핑하기</button></div></div>` : ''}
   </div>`;
 }
@@ -826,11 +829,11 @@ function screenPlusManage() {
 /* ─── 14. 의사결정 화면 (경고 영역 + 다크패턴) ─────────────────────── */
 // TASK 01 Nagging — 2차 추천
 function screenNagSecond(_, ctx = T, preview = false) {
-  const b = PRODUCTS.buds;
+  const b = PRODUCTS.slim;
   return `<div class="screen">${topBar({ title: '추천 상품', back: false, preview })}
     <main class="content">
       <h2 class="dp-title">할인 상품을 다시 확인해보세요</h2>
-      <section class="card offer-card">${art('buds')}<div>
+      <section class="card offer-card">${art('slim')}<div>
         <p class="item-name" style="font-size:20px">${b.name}</p><span class="sale-pill">30% 할인</span>
         <p style="margin-top:4px"><span class="strike">${won(b.price)}</span> <b style="font-size:22px">${won(b.salePrice)}</b></p>
       </div></section>
@@ -977,8 +980,8 @@ function actBeginTask() {
   T = newTaskState(a.taskId, a.condition, idx + 1);   // 과제마다 완전히 새로운 상태
   logEvent('task_started', { attempt: session.attempts[a.taskId] });
   navStack = [];
-  // 멤버십 해지(O) 과제만 MY 화면에서 시작 (메뉴 찾기 부담 제거), 나머지는 홈에서 시작
-  go(a.taskId === 'O' ? 'my' : 'home', {}, { push: false });
+  // 과제별 시작 화면: O → MY, F → 장바구니(토트백 담긴 상태), 나머지 → 홈
+  go(TASK_START_SCREEN[a.taskId] || 'home', {}, { push: false });
   if (CONDITION_SPEC[a.condition].haptic && !HAPTIC_SUPPORTED) {
     showModal({ title: '연구자 확인 필요', body: esc(HAPTIC_UNSUPPORTED_MESSAGE), actions: [{ label: '확인', primary: true }] });
   }
@@ -1043,7 +1046,7 @@ function proceedToOrder() {
 // TASK 01 Nagging
 function actNagChoice({ c }) {
   if (!recordDecision(c)) return;
-  if (c === 'view_discount') go('detail', { id: 'buds' });
+  if (c === 'view_discount') go('detail', { id: 'slim' });
   else if (T.nagIntent === 'buy') finishNagging();
   else go('cart');
 }
@@ -1054,7 +1057,8 @@ function finishNagging() {
   finishTask({
     resistance: d ? CHOICE_RESISTANCE.N[d.choice] : '',
     taskSuccess: items.includes('tumbler') ? 1 : 0,
-    extra: { budsSelected: items.includes('buds') ? 1 : 0, orderItems: items.join('|') },
+    extra: { budsSelected: items.includes('slim') ? 1 : 0,   // 열 이름은 기존 유지: 추천 상품(슬림 텀블러) 담김 여부
+                 orderItems: items.join('|') },
   });
   endTaskView();
 }

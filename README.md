@@ -21,6 +21,15 @@
 - I·F의 taskSuccess = 대상 상품 구매 완료
 - 상품명은 한국어 표기 (데일리 텀블러, 슬림 텀블러 등). 상품 ID는 영문 그대로(tumbler, buds …)
 
+## 실험 흐름 (설문·인터뷰 포함)
+참가 번호 → **사전설문(3화면)** → 공통 안내 → 과제 5개 → 인지 확인 → **사후설문(경고 방식 4개 × 4문항 + 최종 선호)** → **사후 인터뷰(7문항 음성 녹음)** → 종료
+- phase: `preSurvey → tasks → recognition → postSurvey → interview → done` (단계마다 저장, 같은 번호로 이어하기)
+- 기존 데이터에는 `preSurvey / postSurvey / interview / progress`가 자동 보완됨
+- `completedAt`은 인터뷰 Q7까지 녹음 또는 '답변하지 않기' 후에만 기록
+- 녹음: iPhone 앱 = expo-audio 녹음 → 앱 문서 폴더 `moa-interview/P01_interview_Q01.m4a` / 브라우저 = MediaRecorder → IndexedDB `MOAExperimentAudio.recordings` (키 `P01_Q01`). localStorage에는 녹음 정보(metadata)만 저장
+- 연구자 모드: 사전설문·사후설문·인터뷰 기록 CSV, 질문별 녹음 재생·공유(다운로드). 참가자 삭제/전체 삭제 시 녹음 파일도 삭제
+- JSON 백업에는 음성 파일이 들어가지 않음 → 녹음은 연구자 모드에서 질문별로 공유해 따로 보관
+
 ## 진동 방식 (자동 선택)
 | 기기 | 방식 | 비고 |
 |---|---|---|

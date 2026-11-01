@@ -387,3 +387,57 @@ body.is-researcher #app { max-width: 1200px; background: #F6F7F9; }
 .dbg-tools { margin-top: 20px; padding: 16px; border-radius: 14px; border: 2px dashed #C2185B; background: #FFF5F8; font-size: 15px; }
 .dbg-tools h2 { font-size: 17px; font-weight: 800; color: #9C1048; margin-bottom: 6px; }
 .dbg-tools .r-test .btn { font-size: 15px; }
+
+/* ---------- 사전·사후설문 / 인터뷰 (추가) ---------- */
+.survey { padding: 24px 16px 48px; }
+.q-block { background: #fff; border: 1px solid #E4E7EB; border-radius: 16px; padding: 18px 16px 16px; margin-top: 16px; }
+.q-num { font-size: 16px; font-weight: 800; color: var(--brand); }
+.q-block .q-title { font-size: 21px; margin-top: 4px; }
+.opt-list { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+.opt-btn {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 58px; padding: 12px 18px;
+  border: 2px solid #A9B1BA; border-radius: 12px; background: #fff; text-align: left;
+  font-size: 19px; font-weight: 700; color: var(--text);
+}
+.opt-btn.is-selected { background: var(--brand); border-color: var(--brand); color: #fff; }
+.opt-btn.is-selected::after { content: "✓"; margin-left: auto; font-size: 22px; }
+.scale { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 14px; }
+.scale-btn {
+  min-height: 60px; border: 2px solid #A9B1BA; border-radius: 12px; background: #fff;
+  font-size: 24px; font-weight: 800; color: var(--text);
+}
+.scale-btn.is-selected { background: var(--brand); border-color: var(--brand); color: #fff; box-shadow: 0 0 0 3px rgba(15, 107, 92, 0.25); }
+.scale-ends { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; font-size: 17px; color: var(--sub); }
+.scale-ends span:last-child { text-align: right; }
+.scale-picked { min-height: 28px; margin-top: 6px; font-size: 18px; font-weight: 800; color: var(--brand); }
+.age-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+.age-input {
+  width: 140px; min-height: 60px; padding: 0 12px; border: 2px solid #A9B1BA; border-radius: 12px; background: #fff;
+  font-size: 26px; font-weight: 800; text-align: center;
+}
+.age-input:focus { outline: 3px solid rgba(15, 107, 92, 0.35); border-color: var(--brand); }
+.age-unit { font-size: 20px; font-weight: 700; }
+.survey > .btn-xl { margin-top: 8px; }
+.cond-card { margin-top: 12px; padding: 18px 16px; border-radius: 16px; background: var(--brand-soft); border: 1px solid #BFDDD6; }
+.cond-name { font-size: 24px; font-weight: 800; }
+.cond-desc { color: var(--sub); margin: 4px 0 14px; }
+.iv-question { font-size: 22px; font-weight: 800; line-height: 1.5; margin-top: 12px; padding: 20px 18px; background: #fff; border: 1px solid #E4E7EB; border-radius: 16px; }
+.rec-panel { margin-top: 24px; text-align: center; }
+.btn-rec { min-height: 76px; font-size: 22px; }
+.btn-stop { background: #B42318; color: #fff; }
+.btn-stop:active { background: #8F1C13; }
+.rec-status { font-size: 22px; font-weight: 800; }
+.rec-status.recording { color: #B42318; }
+.rec-timer { font-size: 44px; font-weight: 800; font-variant-numeric: tabular-nums; margin: 6px 0 16px; }
+.rec-done { font-size: 21px; font-weight: 800; color: var(--brand); }
+.rec-len { color: var(--sub); font-weight: 700; }
+.r-sub { margin-top: 14px; }
+.r-sub h3 { font-size: 16px; font-weight: 800; margin-bottom: 4px; }
+.r-iv-actions { display: flex; gap: 6px; }
+.r-iv-actions .btn-small { margin-left: 0; }
+.dbg-sec { margin-top: 8px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.2); }
+.dbg-btns { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+.dbg-btns button { border: 0; border-radius: 6px; padding: 4px 8px; background: #2E8F7C; color: #fff; font: inherit; }
+/* 디버그 패널의 글자 영역은 터치를 아래 화면으로 통과시킴 (버튼·접기만 누를 수 있음) */
+#debugPanel, .dbg-body { pointer-events: none; }
+.dbg-toggle, .dbg-body button, .dbg-body summary, .dbg-body a, .dbg-body details[open] pre { pointer-events: auto; }

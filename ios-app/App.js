@@ -6,6 +6,15 @@
  *   웹 → 앱  { type: 'haptic', style, id }               진동 요청
  *   앱 → 웹  { type: 'hapticAck', id, ok, error, style }  진동 실행 확인 (데이터에 기록됨)
  *   웹 → 앱  { type: 'export', filename, mime, content } CSV/JSON 공유 화면 열기
+ *
+ * 사후 인터뷰 녹음 (expo-audio 녹음 기능 사용, 응답은 같은 id로 회신)
+ *   interviewMicPermission                         → interviewMicPermissionResult { granted }
+ *   interviewRecordStart { participantId, questionId } → interviewRecordStarted
+ *   interviewRecordStop  { participantId, questionId } → interviewRecordStopped { uri, fileName, durationMs, mimeType }
+ *   interviewAudioPlay   { uri }                     → interviewAudioPlayed
+ *   interviewAudioShare  { uri, fileName }           → interviewAudioShared
+ *   interviewAudioDelete { participantId | all }     → interviewAudioDeleted { count }
+ *   녹음 파일: 앱 문서 폴더/moa-interview/P01_interview_Q01.m4a (참가 번호와 질문 번호만 사용)
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, Share, StyleSheet, Text, Vibration, View } from 'react-native';
@@ -36,6 +45,56 @@ async function runHaptic(style) {
   Vibration.vibrate();
 }
 
+// ── 인터뷰 녹음 파일 보관 (Expo SDK 버전에 따라 파일 API가 달라 둘 다 지원) ──
+const INTERVIEW_DIR = 'moa-interview';
+const SAFE_ID = /^[A-Za-z0-9]+$/;
+const useRecorderHook = ExpoAudio.useAudioRecorder || (() => null);
+const RECORDING_OPTIONS = ExpoAudio.RecordingPresets ? ExpoAudio.RecordingPresets.HIGH_QUALITY : undefined;
+
+async function setRecordingMode(allowsRecording) {
+  if (!ExpoAudio.setAudioModeAsync) return;
+  // 녹음 중에만 allowsRecording. 끝나면 꺼서 경고음·재생이 스피커로 나오게 함
+  await ExpoAudio.setAudioModeAsync({ playsInSilentMode: true, allowsRecording, shouldRouteThroughEarpiece: false });
+}
+async function requestMicPermission() {
+  if (ExpoAudio.requestRecordingPermissionsAsync) return ExpoAudio.requestRecordingPermissionsAsync();
+  if (ExpoAudio.AudioModule && ExpoAudio.AudioModule.requestRecordingPermissionsAsync) return ExpoAudio.AudioModule.requestRecordingPermissionsAsync();
+  throw new Error('recording_not_supported');
+}
+async function saveInterviewFile(srcUri, fileName) {
+  if (FileSystem.File && FileSystem.Directory && FileSystem.Paths) {
+    const dir = new FileSystem.Directory(FileSystem.Paths.document, INTERVIEW_DIR);
+    if (!dir.exists) dir.create();
+    const dest = new FileSystem.File(dir, fileName);
+    if (dest.exists) dest.delete();                 // 다시 녹음하면 이전 파일 교체
+    new FileSystem.File(srcUri).copy(dest);
+    return dest.uri;
+  }
+  const dir = FileSystem.documentDirectory + INTERVIEW_DIR + '/';
+  await FileSystem.makeDirectoryAsync(dir, { intermediates: true }).catch(() => {});
+  const dest = dir + fileName;
+  await FileSystem.deleteAsync(dest, { idempotent: true });
+  await FileSystem.copyAsync({ from: srcUri, to: dest });
+  return dest;
+}
+async function deleteInterviewFiles(prefix) {
+  let count = 0;
+  if (FileSystem.File && FileSystem.Directory && FileSystem.Paths) {
+    const dir = new FileSystem.Directory(FileSystem.Paths.document, INTERVIEW_DIR);
+    if (!dir.exists) return 0;
+    for (const item of dir.list()) {
+      if (item instanceof FileSystem.File && (!prefix || item.name.startsWith(prefix))) { item.delete(); count++; }
+    }
+    return count;
+  }
+  const dir = FileSystem.documentDirectory + INTERVIEW_DIR + '/';
+  const names = await FileSystem.readDirectoryAsync(dir).catch(() => []);
+  for (const name of names) {
+    if (!prefix || name.startsWith(prefix)) { await FileSystem.deleteAsync(dir + name, { idempotent: true }); count++; }
+  }
+  return count;
+}
+
 // 공유용 임시 파일 만들기 (Expo SDK 버전에 따라 파일 API가 달라 둘 다 지원)
 async function writeTempFile(filename, content) {
   if (FileSystem.File && FileSystem.Paths) {
@@ -58,6 +117,13 @@ function Shell() {
   // 앱을 열 때마다 주소 뒤에 시각을 붙여 항상 최신 실험 페이지를 받음 (저장된 데이터에는 영향 없음)
   const [pageUrl, setPageUrl] = useState(() => `${APP_URL}?v=${Date.now()}`);
 
+  // 인터뷰 녹음기 (expo-audio)
+  const recorder = useRecorderHook(RECORDING_OPTIONS);
+  const recorderRef = useRef(recorder);
+  recorderRef.current = recorder;
+  const recStartRef = useRef(0);
+  const playerRef = useRef(null);
+
   // 옆면 무음 스위치가 켜져 있어도 경고음이 나도록 오디오 모드 설정
   useEffect(() => {
     try {
@@ -71,6 +137,74 @@ function Shell() {
     webRef.current.injectJavaScript(`window.__moaNative && window.__moaNative(${JSON.stringify(payload)}); true;`);
   }, []);
 
+  // 인터뷰 녹음 메시지 처리 (haptic / export 처리와는 별개)
+  const handleInterview = useCallback(async msg => {
+    const done = (type, extra = {}) => reply({ type, id: msg.id, ok: true, ...extra });
+    const fail = (type, e) => reply({ type, id: msg.id, ok: false, error: String((e && e.message) || e) });
+    const rec = recorderRef.current;
+    const pid = String(msg.participantId || ''), qid = String(msg.questionId || '');
+
+    if (msg.type === 'interviewMicPermission') {
+      try {
+        const st = await requestMicPermission();
+        reply({ type: 'interviewMicPermissionResult', id: msg.id, ok: true, granted: !!(st && st.granted) && !!rec });
+      } catch (e) { fail('interviewMicPermissionResult', e); }
+      return;
+    }
+    if (msg.type === 'interviewRecordStart') {
+      try {
+        if (!rec) throw new Error('recording_not_supported');
+        if (!SAFE_ID.test(pid) || !SAFE_ID.test(qid)) throw new Error('bad_id');
+        if (playerRef.current) { try { playerRef.current.pause(); } catch (e) { /* noop */ } }
+        await setRecordingMode(true);
+        await rec.prepareToRecordAsync();
+        rec.record();
+        recStartRef.current = Date.now();
+        done('interviewRecordStarted');
+      } catch (e) { await setRecordingMode(false).catch(() => {}); fail('interviewRecordStarted', e); }
+      return;
+    }
+    if (msg.type === 'interviewRecordStop') {
+      try {
+        if (!rec) throw new Error('recording_not_supported');
+        await rec.stop();
+        const durationMs = Date.now() - recStartRef.current;
+        await setRecordingMode(false);
+        if (!rec.uri) throw new Error('no_recording_file');
+        const fileName = `${pid}_interview_${qid}.m4a`;
+        const uri = await saveInterviewFile(rec.uri, fileName);
+        done('interviewRecordStopped', { uri, fileName, durationMs, mimeType: 'audio/mp4' });
+      } catch (e) { await setRecordingMode(false).catch(() => {}); fail('interviewRecordStopped', e); }
+      return;
+    }
+    if (msg.type === 'interviewAudioPlay') {
+      try {
+        await setRecordingMode(false);
+        const old = playerRef.current;
+        if (old) { try { old.pause(); (old.remove || old.release || (() => {})).call(old); } catch (e) { /* noop */ } }
+        const player = ExpoAudio.createAudioPlayer({ uri: msg.uri });
+        playerRef.current = player;
+        player.play();
+        done('interviewAudioPlayed');
+      } catch (e) { fail('interviewAudioPlayed', e); }
+      return;
+    }
+    if (msg.type === 'interviewAudioShare') {
+      try {
+        await Sharing.shareAsync(msg.uri, { mimeType: 'audio/mp4', UTI: 'com.apple.m4a-audio', dialogTitle: msg.fileName || 'interview.m4a' });
+        done('interviewAudioShared');
+      } catch (e) { fail('interviewAudioShared', e); }
+      return;
+    }
+    if (msg.type === 'interviewAudioDelete') {
+      try {
+        if (!msg.all && !SAFE_ID.test(pid)) throw new Error('bad_id');
+        const count = await deleteInterviewFiles(msg.all ? '' : `${pid}_`);
+        done('interviewAudioDeleted', { count });
+      } catch (e) { fail('interviewAudioDeleted', e); }
+    }
+  }, [reply]);
+
   const onMessage = useCallback(async event => {
     let msg;
     try { msg = JSON.parse(event.nativeEvent.data); } catch (e) { return; }
@@ -81,6 +215,11 @@ function Shell() {
       try { await runHaptic(msg.style); }
       catch (e) { ok = false; error = String((e && e.message) || e); }
       reply({ type: 'hapticAck', id: msg.id, ok, error, style: msg.style || 'vibrate' });
+      return;
+    }
+
+    if (typeof msg.type === 'string' && msg.type.startsWith('interview')) {
+      await handleInterview(msg);
       return;
     }
 
@@ -108,7 +247,7 @@ function Shell() {
         }
       }
     }
-  }, [reply]);
+  }, [reply, handleInterview]);
 
   // 실험 페이지 밖으로 나가는 링크 차단
   const onShouldStart = useCallback(req => {

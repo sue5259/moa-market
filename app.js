@@ -219,7 +219,10 @@ function loadStore() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const d = JSON.parse(raw);
-      if (d && typeof d.participants === 'object') return d;
+      if (d && typeof d.participants === 'object') {
+        Object.values(d.participants).forEach(normalizeParticipant);   // 새 필드(preSurvey 등) 자동 보완
+        return d;
+      }
     }
   } catch (e) { console.error('[MOA] 저장 데이터 읽기 실패', e); }
   return { version: 1, participants: {} };
@@ -323,6 +326,8 @@ window.__moaNative = msg => {
     debugUpdate();
   } else if (msg.type === 'exportDone') {
     showToast(msg.ok ? '공유 화면을 열었습니다.' : '내보내기 실패: ' + (msg.error || ''));
+  } else if (typeof msg.type === 'string' && msg.type.startsWith('interview')) {
+    handleInterviewNative(msg);                 // 인터뷰 녹음·재생·공유·삭제 응답
   }
 };
 
@@ -637,7 +642,7 @@ function screenTaskDone() {
 }
 function screenRecogIntro() {
   return `<main class="screen center-screen"><div class="intro-card">
-    <p class="step-label">마지막 단계</p>
+    <p class="step-label">다음 단계</p>
     <h2 class="done-title" style="text-align:left;margin-top:8px">앞에서 보았던 화면을 다시 보여드립니다</h2>
     <p class="intro-sub" style="margin:12px 0 24px">화면을 하나씩 보면서 질문에 답해 주세요. 정답은 없습니다. 느낀 그대로 답해 주시면 됩니다.</p>
     <button class="btn btn-primary btn-xl" data-act="startRecognition">시작하기</button>
@@ -944,8 +949,9 @@ function startSession(id) {
   }
   if (p) {
     const done = Object.keys(p.results).length;
+    const where = p.phase === 'tasks' ? `과제 ${done}/5 완료` : `${PHASE_LABEL[p.phase] || p.phase} 진행 중`;
     showModal({ title: '이전 기록이 있습니다',
-      body: `${id}: ${p.phase === 'tasks' ? `${done}/5 과제 완료` : '과제 완료, 마지막 질문 진행 중'} 상태입니다.<br>이어서 진행할까요? (진행 중이던 과제는 처음부터 다시 시작합니다)`,
+      body: `${id}: ${where} 상태입니다.<br>이어서 진행할까요? (진행 중이던 과제나 녹음은 처음부터 다시 시작합니다)`,
       actions: [{ label: '이어서 진행', primary: true, onClick: () => enterSession(p, true) }, { label: '취소' }] });
     return;
   }
@@ -953,8 +959,9 @@ function startSession(id) {
     participantId: id, mode: DEBUG ? 'debug' : 'participant',
     createdAt: iso(), updatedAt: iso(), completedAt: null,
     assignment: ASSIGNMENTS[id].map(x => ({ ...x })),
-    currentIndex: 0, phase: 'tasks', recogIndex: 0,
+    currentIndex: 0, phase: 'preSurvey', recogIndex: 0,
     results: {}, recognition: {}, attempts: {}, device: deviceInfo(), sessionEvents: [],
+    preSurvey: {}, postSurvey: {}, interview: {}, progress: {},
   };
   store.participants[id] = p;
   saveStore();
@@ -968,8 +975,12 @@ function enterSession(p, resumed) {
   requestWakeLock();
   maybeFullscreen();
   // 공통 안내는 첫 과제를 아직 시작하지 않았을 때 한 번만
-  if (p.phase === 'tasks') go(p.currentIndex === 0 && !Object.keys(p.attempts).length ? 'commonIntro' : 'taskIntro', {}, { push: false });
+  normalizeParticipant(p);
+  if (p.phase === 'preSurvey') go(p.progress.preSurveyPage ? 'preSurvey' : 'preSurveyIntro', {}, { push: false });
+  else if (p.phase === 'tasks') go(p.currentIndex === 0 && !Object.keys(p.attempts).length ? 'commonIntro' : 'taskIntro', {}, { push: false });
   else if (p.phase === 'recognition') { recogDraft = { yes: null, text: '' }; go(p.recogIndex === 0 ? 'recogIntro' : 'recog', {}, { push: false }); }
+  else if (p.phase === 'postSurvey') go(p.progress.postSurveyIndex || Object.keys(p.postSurvey).length ? 'postSurvey' : 'postSurveyIntro', {}, { push: false });
+  else if (p.phase === 'interview') { rec = { status: 'idle', qid: null, error: '' }; go('interviewIntro', {}, { push: false }); }
 }
 function actBeginTask() {
   ensureAudio();
@@ -1178,11 +1189,9 @@ function actRecogNext() {
   session.updatedAt = iso();
   recogDraft = { yes: null, text: '' };
   if (session.recogIndex >= session.assignment.length) {
-    session.phase = 'done';
-    session.completedAt = iso();
+    session.phase = 'postSurvey';
     saveStore();
-    releaseWakeLock();
-    go('end', {}, { push: false });
+    go('postSurveyIntro', {}, { push: false });
   } else {
     saveStore();
     go('recog', {}, { push: false });
@@ -1264,6 +1273,7 @@ function debugUpdate() {
     ${T && T.taskId === 'S' ? `<div>안심배송 ${T.addon ? 'ON' : 'OFF'} · 조작 ${T.addonToggleCount}회</div>` : ''}
     <details><summary>마지막 저장 로그</summary><pre>${esc(lastSavedRow ? JSON.stringify({ ...lastSavedRow, events: lastSavedRow.events.length + ' events' }, null, 1) : '-')}</pre></details>
     <details><summary>현재 이벤트 로그</summary><pre>${esc(T ? JSON.stringify(T.events.slice(-12), null, 1) : '-')}</pre></details>
+    ${debugSurveyHTML()}
     <div><a href="?researcher=1" target="_blank">연구자 모드</a></div>
   </div>` : ''}`;
 }
@@ -1342,9 +1352,8 @@ function summaryTable(rows, key, order) {
     <p class="r-meta">‘있었다’ 응답률은 자기보고 값이며, 최종 인지 코딩(0/1)은 연구자가 서술 내용을 보고 별도로 수행합니다.</p>`;
 }
 function participantSection(p) {
-  const done = Object.keys(p.results).length;
-  const status = p.phase === 'done' ? '<span class="tag tag-ok">완료</span>'
-    : p.phase === 'recognition' ? `<span class="tag">인지 확인 ${p.recogIndex}/5</span>` : `<span class="tag">과제 ${done}/5</span>`;
+  normalizeParticipant(p);
+  const status = participantStatusTag(p);
   const rows = p.assignment.map((a, i) => {
     const r = p.results[a.taskId];
     const rec = p.recognition[a.taskId] || {};
@@ -1364,6 +1373,7 @@ function participantSection(p) {
     <p class="r-meta">시작 ${new Date(p.createdAt).toLocaleString('ko-KR')} · 화면 ${dev.screenWidth}×${dev.screenHeight} · 진동 ${dev.hapticMethod || (dev.hapticSupported ? 'vibrate' : '미지원')}</p>
     <div class="table-wrap"><table class="r-table"><thead><tr><th>#</th><th>Task</th><th>Condition</th><th>Choice</th><th>Resist.</th><th>RT ms</th><th>RT s</th><th>Success</th><th>Audio</th><th>Haptic</th><th>인지</th><th>인지 서술</th><th>시도</th></tr></thead>
     <tbody>${rows}</tbody></table></div>
+    ${participantSurveyHTML(p)}
   </section>`;
 }
 function renderResearcher() {
@@ -1376,6 +1386,9 @@ function renderResearcher() {
     <section class="r-actions">
       <button class="btn btn-primary" data-act="rCsv">CSV 다운로드${NATIVE_APP ? ' (공유)' : ''}</button>
       <button class="btn btn-secondary" data-act="rJson">JSON 백업 다운로드${NATIVE_APP ? ' (공유)' : ''}</button>
+      <button class="btn btn-secondary" data-act="rPreCsv">사전설문 CSV</button>
+      <button class="btn btn-secondary" data-act="rPostCsv">사후설문 CSV</button>
+      <button class="btn btn-secondary" data-act="rInterviewCsv">인터뷰 기록 CSV</button>
       <label class="btn btn-secondary file-btn">JSON 불러오기<input type="file" accept="application/json,.json" id="importFile" hidden></label>
       ${CAN_SHARE_FILES ? '<button class="btn btn-secondary" data-act="rShareCsv">CSV 공유 (AirDrop·메일)</button>' : ''}
       <button class="btn btn-secondary" data-act="rRefresh">새로고침</button>
@@ -1423,13 +1436,15 @@ function rDeleteOne({ id }) {
   if (!confirm(`${id}의 기록을 삭제할까요?`)) return;
   if (!confirm(`정말 삭제합니까? ${id}의 기록은 되돌릴 수 없습니다.`)) return;
   delete store.participants[id];
-  saveStore(); renderResearcher();
+  saveStore();
+  deleteAudioFor(id).finally(renderResearcher);      // 이 참가자의 녹음 파일도 삭제
 }
 function rWipe() {
   if (!confirm('저장된 모든 실험 데이터를 삭제할까요?')) return;
   if (!confirm('마지막 확인: 전체 데이터를 영구 삭제합니다. CSV/JSON 백업을 받았나요? 삭제하려면 확인을 누르세요.')) return;
   store.participants = {};
-  saveStore(); renderResearcher();
+  saveStore();
+  deleteAllAudio().finally(renderResearcher);         // 모든 녹음 파일도 삭제
 }
 function rImport(file) {
   if (!file) return;
@@ -1442,11 +1457,681 @@ function rImport(file) {
       const dup = ids.filter(id => store.participants[id]);
       if (!confirm(`${ids.length}명의 기록을 불러옵니다.${dup.length ? `\n같은 ID(${dup.join(', ')})는 파일 내용으로 덮어씁니다.` : ''}\n계속할까요?`)) return;
       Object.assign(store.participants, d.participants);
+      Object.values(store.participants).forEach(normalizeParticipant);
       saveStore(); renderResearcher();
     } catch (err) { alert('불러오기 실패: ' + err.message); }
   };
   reader.readAsText(file);
 }
+
+/* ─── 19-A. 사전설문 · 사후설문 · 사후 인터뷰(음성 녹음) ──────────────── */
+const LIKERT_AGREE = ['전혀 그렇지 않다', '그렇지 않다', '보통이다', '그렇다', '매우 그렇다'];
+const LIKERT_FREQ = ['전혀 이용하지 않는다', '거의 이용하지 않는다', '가끔 이용한다', '자주 이용한다', '매우 자주 이용한다'];
+
+// 사전설문 (3개 화면)
+const PRE_SURVEY_PAGES = [
+  [
+    { key: 'age', type: 'number', text: '현재 연령을 입력해 주세요.' },
+    { key: 'smartphoneYears', type: 'choice', text: '스마트폰을 사용한 기간은 얼마나 되셨나요?',
+      options: [['lt1', '1년 미만'], ['1to3', '1년 이상 ~ 3년 미만'], ['3to5', '3년 이상 ~ 5년 미만'], ['5plus', '5년 이상']] },
+    { key: 'dailyUse', type: 'choice', text: '하루 평균 스마트폰을 얼마나 사용하시나요?',
+      options: [['lt1', '1시간 미만'], ['1to3', '1~3시간'], ['3to5', '3~5시간'], ['5plus', '5시간 이상']] },
+  ],
+  [
+    { key: 'shoppingFrequency', type: 'scale', labels: LIKERT_FREQ, text: '스마트폰으로 온라인 쇼핑을 얼마나 자주 이용하시나요?' },
+    { key: 'subscriptionExperience', type: 'choice', text: '모바일 앱에서 유료 멤버십이나 정기구독 서비스를 이용해 본 경험이 있나요?',
+      options: [[1, '있다'], [0, '없다']] },
+    { key: 'mobilePaymentFamiliarity', type: 'scale', labels: LIKERT_AGREE, text: '스마트폰으로 상품을 구매하거나 결제하는 데 익숙하다.' },
+  ],
+  [
+    { key: 'menuFindingConfidence', type: 'scale', labels: LIKERT_AGREE, text: '새로운 앱에서도 원하는 메뉴나 기능을 스스로 찾을 수 있다.' },
+    { key: 'settingsFamiliarity', type: 'scale', labels: LIKERT_AGREE, text: '알림, 결제, 구독 등의 앱 설정을 스스로 변경하는 데 익숙하다.' },
+  ],
+];
+const PRE_SURVEY_KEYS = PRE_SURVEY_PAGES.flat().map(q => q.key);
+const SURVEY_MISSING_MESSAGE = '응답하지 않은 문항이 있습니다.';
+
+// 사후설문 (No Warning 제외 4개 경고 방식 × 4문항 + 최종 선호)
+const POST_CONDITIONS = ['V', 'VA', 'VH', 'VAH'];
+const POST_CONDITION_LABEL = { V: '시각 경고', VA: '시각 + 소리 경고', VH: '시각 + 진동 경고', VAH: '시각 + 소리 + 진동 경고' };
+const POST_CONDITION_DESC = {
+  V: '화면에 경고 창만 나타나는 방식', VA: '경고 창과 함께 소리가 나는 방식',
+  VH: '경고 창과 함께 진동이 오는 방식', VAH: '경고 창과 함께 소리와 진동이 모두 나는 방식',
+};
+const POST_ITEMS = [
+  ['noticeable', '이 경고는 쉽게 알아차릴 수 있었다.'],
+  ['recheck', '이 경고는 선택하기 전에 화면의 정보와 선택지를 다시 확인하는 데 도움이 되었다.'],
+  ['burden', '이 경고는 불편하거나 부담스럽게 느껴졌다.'],
+  ['usageIntent', '실제 모바일 서비스에서도 이러한 경고 방식을 사용하고 싶다.'],
+];
+
+// 사후 인터뷰 질문
+const INTERVIEW_QUESTIONS = [
+  ['Q01', '과제를 수행하면서 경고가 나타났을 때 가장 먼저 어떤 느낌이 들었나요?'],
+  ['Q02', '경고 때문에 화면이나 선택지를 다시 확인한 경우가 있었나요? 있었다면 어떤 상황이었나요?'],
+  ['Q03', '경고 때문에 원래 하려고 했던 선택을 다시 생각하거나 바꾼 경우가 있었나요? 그 이유는 무엇인가요?'],
+  ['Q04', '화면에만 경고가 나타난 경우와 소리나 진동이 함께 나타난 경우에는 어떤 차이가 있었나요?'],
+  ['Q05', '소리와 진동 중 어떤 자극이 더 도움이 되었나요? 그 이유는 무엇인가요?'],
+  ['Q06', '소리와 진동이 동시에 나타난 경고는 도움이 되었나요, 아니면 과하거나 부담스럽게 느껴졌나요? 그 이유는 무엇인가요?'],
+  ['Q07', '실제 쇼핑이나 모바일 서비스를 이용할 때 어떤 경고 방식이 가장 적절하다고 생각하시나요? 그 이유는 무엇인가요?'],
+];
+const INTERVIEW_IDS = INTERVIEW_QUESTIONS.map(q => q[0]);
+const MIC_UNAVAILABLE_MESSAGE = '마이크를 사용할 수 없습니다. 연구자에게 알려 주세요.';
+
+const PHASE_LABEL = { preSurvey: '사전설문', tasks: '과제', recognition: '인지 확인', postSurvey: '사후설문', interview: '인터뷰', done: '완료' };
+
+// 기존 참가자 데이터에 새 필드가 없으면 자동 보완 (하위 호환)
+function normalizeParticipant(p) {
+  if (!p || typeof p !== 'object') return p;
+  for (const k of ['results', 'recognition', 'attempts', 'preSurvey', 'postSurvey', 'interview', 'progress']) {
+    if (!p[k] || typeof p[k] !== 'object' || Array.isArray(p[k])) p[k] = {};
+  }
+  if (!Array.isArray(p.sessionEvents)) p.sessionEvents = [];
+  if (!p.phase) p.phase = 'tasks';
+  return p;
+}
+
+/* 공통 UI: 선택 버튼 / 1~5 척도 */
+function optionList(survey, q, value, extra = '') {
+  return `<div class="opt-list" role="radiogroup">${q.options.map(([v, label]) => {
+    const sel = value !== undefined && value !== null && String(value) === String(v);
+    return `<button type="button" class="opt-btn ${sel ? 'is-selected' : ''}" data-act="surveyPick" data-survey="${survey}" data-key="${q.key}"
+      data-v="${v}" data-num="${typeof v === 'number' ? 1 : 0}" ${extra} role="radio" aria-checked="${sel}">${label}</button>`;
+  }).join('')}</div>`;
+}
+function scaleButtons(survey, key, labels, value, extra = '') {
+  return `<div class="scale" role="radiogroup">${[1, 2, 3, 4, 5].map(n =>
+    `<button type="button" class="scale-btn ${value === n ? 'is-selected' : ''}" data-act="surveyPick" data-survey="${survey}" data-key="${key}"
+      data-v="${n}" data-num="1" ${extra} role="radio" aria-checked="${value === n}" aria-label="${n} ${labels[n - 1]}">${n}</button>`).join('')}</div>
+    <div class="scale-ends"><span>1 ${labels[0]}</span><span>5 ${labels[4]}</span></div>
+    <p class="scale-picked">${value ? `선택: ${value} ${labels[value - 1]}` : ''}</p>`;
+}
+
+/* 사전설문 화면 */
+function screenPreSurveyIntro() {
+  return `<main class="screen center-screen"><div class="intro-card">
+    <p class="step-label">사전 설문조사</p>
+    <h2 class="done-title" style="text-align:left;margin-top:8px">사전 설문조사</h2>
+    <p class="intro-sub" style="margin:12px 0 24px">실험을 시작하기 전에 스마트폰 사용 경험에 관한 간단한 질문에 답해 주세요.<br>응답 내용은 연구 결과를 분석하는 데에만 사용됩니다.</p>
+    <button class="btn btn-primary btn-xl" data-act="preSurveyStart">설문 시작하기</button>
+  </div></main>`;
+}
+function screenPreSurvey() {
+  const page = Math.min(session.progress.preSurveyPage || 0, PRE_SURVEY_PAGES.length - 1);
+  const ans = session.preSurvey;
+  const blocks = PRE_SURVEY_PAGES[page].map((q, i) => {
+    let body = '';
+    if (q.type === 'number') {
+      body = `<div class="age-row"><input id="ageInput" class="age-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3"
+        value="${ans.age ?? ''}" aria-label="연령"><span class="age-unit">세</span></div>`;
+    } else if (q.type === 'choice') body = optionList('pre', q, ans[q.key]);
+    else body = scaleButtons('pre', q.key, q.labels, ans[q.key]);
+    return `<section class="q-block"><p class="q-num">문항 ${PRE_SURVEY_KEYS.indexOf(q.key) + 1}</p><h3 class="q-title">${q.text}</h3>${body}</section>`;
+  }).join('');
+  return `<main class="screen survey">
+    <p class="step-label">사전 설문 ${page + 1} / ${PRE_SURVEY_PAGES.length}</p>
+    ${blocks}
+    <p class="form-error" id="surveyError" role="alert"></p>
+    <button class="btn btn-primary btn-xl" data-act="preSurveyNext">${page < PRE_SURVEY_PAGES.length - 1 ? '다음' : '설문 마치기'}</button>
+  </main>`;
+}
+function actPreSurveyNext() {
+  const page = session.progress.preSurveyPage || 0;
+  const ageEl = document.getElementById('ageInput');
+  if (ageEl) {
+    const raw = ageEl.value.trim();
+    session.preSurvey.age = /^\d{1,3}$/.test(raw) && Number(raw) > 0 && Number(raw) < 120 ? Number(raw) : (raw === '' ? undefined : raw);
+  }
+  const missing = PRE_SURVEY_PAGES[page].some(q => {
+    const v = session.preSurvey[q.key];
+    return v === undefined || v === null || v === '' || (q.type === 'number' && typeof v !== 'number');
+  });
+  if (missing) {
+    const err = document.getElementById('surveyError');
+    err.textContent = SURVEY_MISSING_MESSAGE + (ageEl && typeof session.preSurvey.age === 'string' ? ' (연령은 숫자로 입력해 주세요)' : '');
+    err.scrollIntoView({ block: 'center' });
+    return;
+  }
+  session.updatedAt = iso();
+  if (page < PRE_SURVEY_PAGES.length - 1) {
+    session.progress.preSurveyPage = page + 1;
+    saveStore();
+    go('preSurvey', {}, { push: false });
+    return;
+  }
+  session.preSurvey.completedAt = iso();
+  session.phase = 'tasks';
+  saveStore();
+  go('commonIntro', {}, { push: false });              // 기존 공통 안내 → 과제 1
+}
+
+/* 사후설문 화면 */
+function screenPostSurveyIntro() {
+  return `<main class="screen center-screen"><div class="intro-card">
+    <p class="step-label">다음 단계</p>
+    <h2 class="done-title" style="text-align:left;margin-top:8px">경고 방식에 대한 설문</h2>
+    <p class="intro-sub" style="margin:12px 0 24px">앞에서 경험한 경고 방식에 대해 질문드리겠습니다.<br>정답은 없습니다. 느끼신 그대로 답해 주세요.</p>
+    <button class="btn btn-primary btn-xl" data-act="postSurveyStart">설문 시작하기</button>
+  </div></main>`;
+}
+function screenPostSurvey() {
+  const idx = session.progress.postSurveyIndex || 0;
+  if (idx >= POST_CONDITIONS.length) return screenPostPreference();
+  const cond = POST_CONDITIONS[idx];
+  const ans = session.postSurvey[cond] || {};
+  const blocks = POST_ITEMS.map(([key, text], i) => `<section class="q-block">
+      <p class="q-num">문항 ${i + 1}</p><h3 class="q-title">${text}</h3>
+      ${scaleButtons('post', key, LIKERT_AGREE, ans[key], `data-cond="${cond}"`)}</section>`).join('');
+  return `<main class="screen survey">
+    <p class="step-label">경고 방식 ${idx + 1} / ${POST_CONDITIONS.length}</p>
+    <div class="cond-card"><h2 class="cond-name">${POST_CONDITION_LABEL[cond]}</h2><p class="cond-desc">${POST_CONDITION_DESC[cond]}</p>
+      <button class="btn btn-secondary" data-act="postReplay" data-cond="${cond}">이 경고 다시 확인하기</button></div>
+    ${blocks}
+    <p class="form-error" id="surveyError" role="alert"></p>
+    <button class="btn btn-primary btn-xl" data-act="postSurveyNext">다음</button>
+  </main>`;
+}
+function screenPostPreference() {
+  const v = session.postSurvey.preferredCondition;
+  const q = { key: 'preferredCondition', options: POST_CONDITIONS.map(c => [c, POST_CONDITION_LABEL[c]]) };
+  return `<main class="screen survey">
+    <p class="step-label">마지막 질문</p>
+    <section class="q-block"><h3 class="q-title">가장 선호하는 경고 방식은 무엇인가요?</h3>${optionList('pref', q, v)}</section>
+    <p class="form-error" id="surveyError" role="alert"></p>
+    <button class="btn btn-primary btn-xl" data-act="postSurveyNext">설문 마치기</button>
+  </main>`;
+}
+function actPostSurveyNext() {
+  const idx = session.progress.postSurveyIndex || 0;
+  const err = document.getElementById('surveyError');
+  if (idx < POST_CONDITIONS.length) {
+    const ans = session.postSurvey[POST_CONDITIONS[idx]] || {};
+    if (POST_ITEMS.some(([k]) => typeof ans[k] !== 'number')) { err.textContent = SURVEY_MISSING_MESSAGE; err.scrollIntoView({ block: 'center' }); return; }
+    session.progress.postSurveyIndex = idx + 1;
+    session.updatedAt = iso();
+    saveStore();
+    go('postSurvey', {}, { push: false });
+    return;
+  }
+  if (!POST_CONDITIONS.includes(session.postSurvey.preferredCondition)) { err.textContent = SURVEY_MISSING_MESSAGE; return; }
+  session.postSurvey.completedAt = iso();
+  session.phase = 'interview';
+  session.updatedAt = iso();
+  saveStore();
+  go('interviewIntro', {}, { push: false });
+}
+
+// 설문 선택 (화면을 다시 그리지 않고 선택 표시만 바꿈)
+function actSurveyPick(d, el) {
+  const v = d.num === '1' ? Number(d.v) : d.v;
+  let labels = null;
+  if (d.survey === 'pre') {
+    session.preSurvey[d.key] = v;
+    const q = PRE_SURVEY_PAGES.flat().find(x => x.key === d.key);
+    labels = q && q.labels;
+  } else if (d.survey === 'post') {
+    session.postSurvey[d.cond] = session.postSurvey[d.cond] || {};
+    session.postSurvey[d.cond][d.key] = v;
+    labels = LIKERT_AGREE;
+  } else if (d.survey === 'pref') {
+    session.postSurvey.preferredCondition = v;
+  }
+  const group = el.closest('[role=radiogroup]');
+  group.querySelectorAll('button').forEach(b => {
+    const on = b === el;
+    b.classList.toggle('is-selected', on);
+    b.setAttribute('aria-checked', String(on));
+  });
+  if (labels) {
+    const picked = group.parentElement.querySelector('.scale-picked');
+    if (picked) picked.textContent = `선택: ${v} ${labels[v - 1]}`;
+  }
+  const errEl = document.getElementById('surveyError');
+  if (errEl) errEl.textContent = '';
+  saveStore();
+  debugUpdate();
+}
+
+/* ── 인터뷰: 녹음 ───────────────────────────────────────────── */
+const AUDIO_DB = 'MOAExperimentAudio', AUDIO_STORE = 'recordings';
+let micPermission = 'unknown';              // unknown | granted | denied
+let rec = { status: 'idle', qid: null };    // idle | starting | recording | stopping
+let recTimer = null;
+let playingAudio = null;
+const nativeAudioPending = {};               // 요청 id → { resolve, timer }
+
+const fmtDuration = ms => {
+  const s = Math.max(0, Math.round((ms || 0) / 1000));
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+};
+const audioKeyOf = (pid, qid) => `${pid}_${qid}`;
+const MEDIA_RECORDER_SUPPORTED = typeof window.MediaRecorder !== 'undefined' && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+function pickRecorderMime() {
+  if (!MEDIA_RECORDER_SUPPORTED || typeof MediaRecorder.isTypeSupported !== 'function') return '';
+  const candidates = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/aac'];
+  return candidates.find(t => { try { return MediaRecorder.isTypeSupported(t); } catch (e) { return false; } }) || '';
+}
+const extOfMime = m => (/mp4|m4a|aac/.test(m || '') ? 'm4a' : /ogg/.test(m || '') ? 'ogg' : 'webm');
+
+// IndexedDB (브라우저 녹음 보관. localStorage에는 음성을 넣지 않음)
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) { reject(new Error('IndexedDB 미지원')); return; }
+    const r = indexedDB.open(AUDIO_DB, 1);
+    r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains(AUDIO_STORE)) r.result.createObjectStore(AUDIO_STORE); };
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+async function idbRun(mode, fn) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(AUDIO_STORE, mode);
+    const out = fn(tx.objectStore(AUDIO_STORE));
+    tx.oncomplete = () => { db.close(); resolve(out && 'result' in out ? out.result : undefined); };
+    tx.onerror = () => { db.close(); reject(tx.error); };
+  });
+}
+const idbPut = (key, value) => idbRun('readwrite', s => s.put(value, key));
+const idbGet = key => idbRun('readonly', s => s.get(key));
+const idbKeys = () => idbRun('readonly', s => s.getAllKeys());
+const idbClear = () => idbRun('readwrite', s => s.clear());
+async function idbDeleteParticipant(pid) {
+  const keys = await idbKeys();
+  const mine = (keys || []).filter(k => String(k).startsWith(pid + '_'));
+  if (mine.length) await idbRun('readwrite', s => { mine.forEach(k => s.delete(k)); });
+  return mine.length;
+}
+
+// iPhone 앱 녹음 요청 (응답은 window.__moaNative 로 돌아옴)
+function nativeAudioRequest(payload, timeoutMs = 12000) {
+  return new Promise(resolve => {
+    const id = 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const timer = setTimeout(() => { delete nativeAudioPending[id]; resolve({ ok: false, error: 'app_timeout' }); }, timeoutMs);
+    nativeAudioPending[id] = { resolve, timer };
+    postToApp({ ...payload, id });
+  });
+}
+function handleInterviewNative(msg) {
+  const p = nativeAudioPending[msg.id];
+  if (!p) return;
+  clearTimeout(p.timer);
+  delete nativeAudioPending[msg.id];
+  p.resolve(msg);
+}
+
+async function requestMicPermission() {
+  if (NATIVE_APP) {
+    const r = await nativeAudioRequest({ type: 'interviewMicPermission' });
+    micPermission = r.ok && r.granted ? 'granted' : 'denied';
+    return micPermission === 'granted';
+  }
+  if (!MEDIA_RECORDER_SUPPORTED) { micPermission = 'denied'; return false; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach(t => t.stop());
+    micPermission = 'granted';
+    return true;
+  } catch (e) {
+    micPermission = 'denied';
+    return false;
+  }
+}
+
+function startRecTimer() {
+  clearInterval(recTimer);
+  recTimer = setInterval(() => {
+    const el = document.getElementById('recTimer');
+    if (el && rec.status === 'recording') el.textContent = fmtDuration(performance.now() - rec.startedPerf);
+    if (DEBUG) debugUpdate();
+  }, 250);
+}
+function stopRecTimer() { clearInterval(recTimer); recTimer = null; }
+function setRecError(text) {
+  rec.error = text;
+  const el = document.getElementById('recError');
+  if (el) el.textContent = text;
+}
+
+async function actRecordStart() {
+  if (rec.status !== 'idle') return;
+  const qid = INTERVIEW_IDS[session.progress.interviewIndex || 0];
+  stopPlayback();
+  rec = { status: 'starting', qid, error: '' };
+  render({ keepScroll: true });
+  if (NATIVE_APP) {
+    const r = await nativeAudioRequest({ type: 'interviewRecordStart', participantId: session.participantId, questionId: qid });
+    if (!r.ok) { rec = { status: 'idle', qid: null, error: '녹음을 시작할 수 없습니다. 연구자에게 알려 주세요.' }; render({ keepScroll: true }); return; }
+    rec = { status: 'recording', qid, startedPerf: performance.now(), native: true };
+  } else {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = pickRecorderMime();
+      const mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      const chunks = [];
+      mr.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+      mr.start(1000);
+      rec = { status: 'recording', qid, startedPerf: performance.now(), mr, chunks, stream, mime: mr.mimeType || mime };
+    } catch (e) {
+      rec = { status: 'idle', qid: null, error: MIC_UNAVAILABLE_MESSAGE };
+      render({ keepScroll: true });
+      return;
+    }
+  }
+  render({ keepScroll: true });
+  startRecTimer();
+}
+
+async function actRecordStop() {
+  if (rec.status !== 'recording') return;
+  const cur = rec;
+  const pid = session.participantId;
+  const webDuration = Math.round(performance.now() - cur.startedPerf);
+  rec = { ...cur, status: 'stopping' };
+  stopRecTimer();
+  render({ keepScroll: true });
+  let meta = null;
+  if (cur.native) {
+    const r = await nativeAudioRequest({ type: 'interviewRecordStop', participantId: pid, questionId: cur.qid });
+    if (r.ok) {
+      meta = { recorded: true, skipped: false, durationMs: Math.round(r.durationMs || webDuration), mimeType: r.mimeType || 'audio/mp4',
+        storageType: 'native', audioKey: audioKeyOf(pid, cur.qid), nativeUri: r.uri || '', fileName: r.fileName || '', recordedAt: iso() };
+    }
+  } else {
+    const blob = await new Promise(resolve => {
+      cur.mr.onstop = () => resolve(new Blob(cur.chunks, { type: cur.mr.mimeType || cur.mime || 'audio/webm' }));
+      try { cur.mr.stop(); } catch (e) { resolve(new Blob(cur.chunks, { type: cur.mime || 'audio/webm' })); }
+    });
+    cur.stream.getTracks().forEach(t => t.stop());
+    const key = audioKeyOf(pid, cur.qid);
+    try {
+      await idbPut(key, { blob, mimeType: blob.type, participantId: pid, questionId: cur.qid, durationMs: webDuration, recordedAt: iso() });
+      meta = { recorded: true, skipped: false, durationMs: webDuration, mimeType: blob.type, storageType: 'indexedDB', audioKey: key, recordedAt: iso() };
+    } catch (e) { console.error('[MOA] 녹음 저장 실패', e); }
+  }
+  if (meta) {
+    session.interview[cur.qid] = meta;          // 다시 녹음하면 같은 키로 교체됨
+    session.updatedAt = iso();
+    saveStore();
+    rec = { status: 'idle', qid: null, error: '' };
+  } else {
+    rec = { status: 'idle', qid: null, error: '녹음을 저장하지 못했습니다. 다시 녹음해 주세요.' };
+  }
+  render({ keepScroll: true });
+}
+
+function stopPlayback() {
+  if (playingAudio) { try { playingAudio.pause(); URL.revokeObjectURL(playingAudio.src); } catch (e) { /* noop */ } playingAudio = null; }
+}
+async function playRecording(pid, qid) {
+  const meta = (store.participants[pid] && store.participants[pid].interview[qid]) || {};
+  if (!meta.recorded) return false;
+  stopPlayback();
+  if (meta.storageType === 'native') {
+    if (!NATIVE_APP) { showToast('이 녹음은 iPhone 실험 앱 안에 저장되어 있습니다.'); return false; }
+    const r = await nativeAudioRequest({ type: 'interviewAudioPlay', uri: meta.nativeUri });
+    if (!r.ok) showToast('녹음을 재생하지 못했습니다.');
+    return !!r.ok;
+  }
+  try {
+    const item = await idbGet(meta.audioKey);
+    if (!item || !item.blob) { showToast('녹음 파일을 찾을 수 없습니다.'); return false; }
+    playingAudio = new Audio(URL.createObjectURL(item.blob));
+    await playingAudio.play();
+    return true;
+  } catch (e) {
+    showToast('녹음을 재생하지 못했습니다.');
+    return false;
+  }
+}
+
+// 참가자/전체 녹음 삭제 (텍스트 데이터 삭제와 함께 호출)
+async function deleteAudioFor(pid) {
+  try { await idbDeleteParticipant(pid); } catch (e) { console.warn('[MOA] IndexedDB 삭제 실패', e); }
+  if (NATIVE_APP) await nativeAudioRequest({ type: 'interviewAudioDelete', participantId: pid });
+}
+async function deleteAllAudio() {
+  try { await idbClear(); } catch (e) { console.warn('[MOA] IndexedDB 삭제 실패', e); }
+  if (NATIVE_APP) await nativeAudioRequest({ type: 'interviewAudioDelete', all: true });
+}
+
+/* 인터뷰 화면 */
+function screenInterviewIntro() {
+  return `<main class="screen center-screen"><div class="intro-card">
+    <p class="step-label">마지막 단계</p>
+    <h2 class="done-title" style="text-align:left;margin-top:8px">사후 인터뷰</h2>
+    <p class="intro-sub" style="margin:12px 0 0">마지막으로 앞에서 경험한 경고 방식에 대해 몇 가지 질문드리겠습니다.</p>
+    <p class="intro-sub" style="margin:12px 0 0">화면에 질문이 하나씩 나타납니다.<br>질문을 읽은 뒤 녹음 버튼을 누르고 편하게 말씀해 주세요.</p>
+    <p class="intro-sub" style="margin:12px 0 24px">녹음된 답변은 연구 분석 목적으로만 사용됩니다.</p>
+    <p class="form-error" id="micError" role="alert"></p>
+    <button class="btn btn-primary btn-xl" data-act="interviewStart">마이크 허용 및 인터뷰 시작</button>
+  </div></main>`;
+}
+function firstOpenInterviewIndex() {
+  const i = INTERVIEW_IDS.findIndex(q => { const m = session.interview[q]; return !(m && (m.recorded || m.skipped)); });
+  return i === -1 ? INTERVIEW_IDS.length - 1 : i;
+}
+async function actInterviewStart(d, el) {
+  if (el) el.disabled = true;
+  const ok = await requestMicPermission();
+  if (!ok) {
+    const err = document.getElementById('micError');
+    if (err) err.textContent = MIC_UNAVAILABLE_MESSAGE;
+    if (el) el.disabled = false;
+    debugUpdate();
+    return;
+  }
+  session.progress.interviewIndex = firstOpenInterviewIndex();
+  saveStore();
+  rec = { status: 'idle', qid: null, error: '' };
+  go('interview', {}, { push: false });
+}
+function screenInterview() {
+  const idx = session.progress.interviewIndex || 0;
+  const [qid, text] = INTERVIEW_QUESTIONS[idx];
+  const meta = session.interview[qid] || {};
+  const isLast = idx === INTERVIEW_QUESTIONS.length - 1;
+  const nextLabel = isLast ? '인터뷰 마치기' : '다음 질문';
+  let panel;
+  if (rec.status === 'recording' && rec.qid === qid) {
+    panel = `<p class="rec-status recording" role="status"><span aria-hidden="true">🔴</span> 녹음 중입니다</p>
+      <p class="rec-timer" id="recTimer" aria-live="off">${fmtDuration(performance.now() - rec.startedPerf)}</p>
+      <button class="btn btn-stop btn-xl" data-act="recordStop">녹음 종료</button>`;
+  } else if (rec.status === 'starting' || rec.status === 'stopping') {
+    panel = `<p class="rec-status" role="status">${rec.status === 'starting' ? '녹음을 준비하고 있습니다…' : '녹음을 저장하고 있습니다…'}</p>`;
+  } else if (meta.recorded) {
+    panel = `<p class="rec-done" role="status">답변이 녹음되었습니다. <span class="rec-len">(${fmtDuration(meta.durationMs)})</span></p>
+      <div class="btn-stack" style="margin-top:16px">
+        <button class="btn btn-secondary btn-xl" data-act="recordPlay">▶ 답변 들어보기</button>
+        <button class="btn btn-secondary btn-xl" data-act="recordStart">다시 녹음하기</button>
+        <button class="btn btn-primary btn-xl" data-act="interviewNext">${nextLabel}</button>
+      </div>`;
+  } else if (meta.skipped) {
+    panel = `<p class="rec-done" role="status">이 질문에는 답변하지 않았습니다.</p>
+      <div class="btn-stack" style="margin-top:16px">
+        <button class="btn btn-secondary btn-xl" data-act="recordStart">🎙 녹음하기</button>
+        <button class="btn btn-primary btn-xl" data-act="interviewNext">${nextLabel}</button>
+      </div>`;
+  } else {
+    panel = `<button class="btn btn-primary btn-rec" data-act="recordStart">🎙 녹음 시작</button>
+      <button class="btn-text" data-act="interviewSkip">이 질문에는 답변하지 않기</button>`;
+  }
+  return `<main class="screen survey interview">
+    <p class="step-label">인터뷰 ${idx + 1} / ${INTERVIEW_QUESTIONS.length}</p>
+    <h2 class="iv-question">${text}</h2>
+    <section class="rec-panel">${panel}</section>
+    <p class="form-error" id="recError" role="alert">${esc(rec.error || '')}</p>
+  </main>`;
+}
+function actInterviewSkip() {
+  if (rec.status !== 'idle') return;
+  const qid = INTERVIEW_IDS[session.progress.interviewIndex || 0];
+  session.interview[qid] = { recorded: false, skipped: true, durationMs: 0, mimeType: '', storageType: '', audioKey: '', recordedAt: iso() };
+  session.updatedAt = iso();
+  saveStore();
+  render({ keepScroll: true });
+}
+function actInterviewNext() {
+  if (rec.status !== 'idle') return;
+  const idx = session.progress.interviewIndex || 0;
+  const meta = session.interview[INTERVIEW_IDS[idx]];
+  if (!meta || !(meta.recorded || meta.skipped)) return;
+  stopPlayback();
+  if (idx < INTERVIEW_IDS.length - 1) {
+    session.progress.interviewIndex = idx + 1;
+    session.updatedAt = iso();
+    saveStore();
+    go('interview', {}, { push: false });
+    return;
+  }
+  // Q7까지 녹음 또는 건너뛰기가 끝난 뒤에만 실험 종료
+  session.phase = 'done';
+  session.completedAt = iso();
+  saveStore();
+  releaseWakeLock();
+  go('end', {}, { push: false });
+}
+
+/* 디버그: 단계 이동 · 자동 입력 */
+function dbgNeedSession() {
+  if (session) return true;
+  showToast('먼저 참가 번호로 시작해 주세요.');
+  return false;
+}
+function dbgGoPre() { if (!dbgNeedSession()) return; T = null; session.phase = 'preSurvey'; session.progress.preSurveyPage = 0; saveStore(); go('preSurveyIntro', {}, { push: false }); }
+function dbgFillPre() {
+  if (!dbgNeedSession()) return;
+  Object.assign(session.preSurvey, { age: 68, smartphoneYears: '5plus', dailyUse: '1to3', shoppingFrequency: 3, subscriptionExperience: 1,
+    mobilePaymentFamiliarity: 4, menuFindingConfidence: 3, settingsFamiliarity: 3 });
+  session.phase = 'preSurvey'; saveStore(); T = null;
+  go('preSurvey', {}, { push: false });
+}
+function dbgGoPost() { if (!dbgNeedSession()) return; T = null; session.phase = 'postSurvey'; session.progress.postSurveyIndex = 0; saveStore(); go('postSurveyIntro', {}, { push: false }); }
+function dbgFillPost() {
+  if (!dbgNeedSession()) return;
+  POST_CONDITIONS.forEach((c, i) => { session.postSurvey[c] = { noticeable: 4, recheck: 4, burden: 2 + (i % 2), usageIntent: 4 }; });
+  session.postSurvey.preferredCondition = 'VH';
+  session.phase = 'postSurvey'; saveStore(); T = null;
+  go('postSurvey', {}, { push: false });
+}
+function dbgGoInterview() { if (!dbgNeedSession()) return; T = null; session.phase = 'interview'; saveStore(); go('interviewIntro', {}, { push: false }); }
+function debugSurveyHTML() {
+  const recDur = rec.status === 'recording' ? fmtDuration(performance.now() - rec.startedPerf) : '-';
+  return `<div class="dbg-sec"><b>설문·인터뷰</b>
+    <div class="dbg-btns">
+      <button data-act="dbgGoPre">사전설문</button><button data-act="dbgFillPre">사전 자동입력</button>
+      <button data-act="dbgGoPost">사후설문</button><button data-act="dbgFillPost">사후 자동입력</button>
+      <button data-act="dbgGoInterview">인터뷰</button>
+    </div>
+    <div>마이크 권한 <b>${micPermission}</b> · 녹음 방식 <b>${NATIVE_APP ? 'iPhone 앱(native)' : MEDIA_RECORDER_SUPPORTED ? `MediaRecorder (${pickRecorderMime() || '기본'})` : '미지원'}</b></div>
+    <div>녹음 상태 <b>${rec.status}</b> · 현재 녹음 시간 <b>${recDur}</b></div>
+    <details><summary>저장된 audio metadata</summary><pre>${esc(session ? JSON.stringify(session.interview, null, 1) : '-')}</pre></details>
+  </div>`;
+}
+
+/* 연구자 모드: 설문·인터뷰 표시와 CSV */
+const PRE_CSV_COLUMNS = ['participantId', ...PRE_SURVEY_KEYS, 'completedAt'];
+const POST_CSV_COLUMNS = ['participantId', ...POST_CONDITIONS.flatMap(c => POST_ITEMS.map(([k]) => `${c}_${k}`)), 'preferredCondition', 'completedAt'];
+const INTERVIEW_CSV_COLUMNS = ['participantId', 'questionId', 'recorded', 'skipped', 'durationMs', 'mimeType', 'storageType', 'audioKey', 'recordedAt'];
+const csvOf = (cols, rows) => '﻿' + [cols.join(','), ...rows.map(r => cols.map(c => csvCell(r[c])).join(','))].join('\r\n');
+function rPreCsv() {
+  const rows = sortedParticipants().filter(p => Object.keys(p.preSurvey).length)
+    .map(p => ({ participantId: p.participantId, ...p.preSurvey }));
+  if (!rows.length) { alert('사전설문 데이터가 없습니다.'); return; }
+  download(`moa_presurvey_${stamp()}.csv`, csvOf(PRE_CSV_COLUMNS, rows), 'text/csv;charset=utf-8');
+}
+function rPostCsv() {
+  const rows = sortedParticipants().filter(p => Object.keys(p.postSurvey).length).map(p => {
+    const r = { participantId: p.participantId, preferredCondition: p.postSurvey.preferredCondition, completedAt: p.postSurvey.completedAt };
+    POST_CONDITIONS.forEach(c => POST_ITEMS.forEach(([k]) => { r[`${c}_${k}`] = (p.postSurvey[c] || {})[k]; }));
+    return r;
+  });
+  if (!rows.length) { alert('사후설문 데이터가 없습니다.'); return; }
+  download(`moa_postsurvey_${stamp()}.csv`, csvOf(POST_CSV_COLUMNS, rows), 'text/csv;charset=utf-8');
+}
+function rInterviewCsv() {
+  const rows = [];
+  sortedParticipants().filter(p => Object.keys(p.interview).length).forEach(p => {
+    INTERVIEW_IDS.forEach(q => {
+      const m = p.interview[q] || {};
+      rows.push({ participantId: p.participantId, questionId: q, recorded: m.recorded ? 1 : 0, skipped: m.skipped ? 1 : 0,
+        durationMs: m.durationMs ?? '', mimeType: m.mimeType || '', storageType: m.storageType || '', audioKey: m.audioKey || '', recordedAt: m.recordedAt || '' });
+    });
+  });
+  if (!rows.length) { alert('인터뷰 데이터가 없습니다.'); return; }
+  download(`moa_interview_${stamp()}.csv`, csvOf(INTERVIEW_CSV_COLUMNS, rows), 'text/csv;charset=utf-8');
+}
+function participantStatusTag(p) {
+  const done = Object.keys(p.results).length;
+  if (p.phase === 'done') return '<span class="tag tag-ok">완료</span>';
+  if (p.phase === 'tasks') return `<span class="tag">과제 ${done}/5</span>`;
+  if (p.phase === 'recognition') return `<span class="tag">인지 확인 ${p.recogIndex}/5</span>`;
+  if (p.phase === 'preSurvey') return `<span class="tag">사전설문 ${(p.progress.preSurveyPage || 0) + 1}/${PRE_SURVEY_PAGES.length}</span>`;
+  if (p.phase === 'postSurvey') return `<span class="tag">사후설문 ${Math.min((p.progress.postSurveyIndex || 0) + 1, POST_CONDITIONS.length + 1)}/${POST_CONDITIONS.length + 1}</span>`;
+  if (p.phase === 'interview') return `<span class="tag">인터뷰 ${INTERVIEW_IDS.filter(q => p.interview[q] && (p.interview[q].recorded || p.interview[q].skipped)).length}/${INTERVIEW_IDS.length}</span>`;
+  return `<span class="tag">${PHASE_LABEL[p.phase] || p.phase}</span>`;
+}
+function participantSurveyHTML(p) {
+  const pre = p.preSurvey, post = p.postSurvey;
+  const preHTML = Object.keys(pre).length
+    ? `<div class="table-wrap"><table class="r-table"><thead><tr>${PRE_SURVEY_KEYS.map(k => `<th>${k}</th>`).join('')}</tr></thead>
+       <tbody><tr>${PRE_SURVEY_KEYS.map(k => `<td>${esc(pre[k] ?? '-')}</td>`).join('')}</tr></tbody></table></div>` : '<p class="r-meta">응답 없음</p>';
+  const postHTML = Object.keys(post).length
+    ? `<div class="table-wrap"><table class="r-table"><thead><tr><th>경고</th>${POST_ITEMS.map(([k]) => `<th>${k}</th>`).join('')}</tr></thead><tbody>
+       ${POST_CONDITIONS.map(c => `<tr><td>${c}</td>${POST_ITEMS.map(([k]) => `<td>${(post[c] || {})[k] ?? '-'}</td>`).join('')}</tr>`).join('')}
+       </tbody></table></div><p class="r-meta">가장 선호: <b>${post.preferredCondition || '-'}</b></p>` : '<p class="r-meta">응답 없음</p>';
+  const ivRows = INTERVIEW_IDS.map((q, i) => {
+    const m = p.interview[q] || {};
+    const state = m.recorded ? `녹음 완료 ${fmtDuration(m.durationMs)}` : m.skipped ? '답변 안 함' : '-';
+    const actions = m.recorded ? `<button class="btn-small" data-act="rPlayAudio" data-id="${p.participantId}" data-q="${q}">재생</button>
+      <button class="btn-small" data-act="rSaveAudio" data-id="${p.participantId}" data-q="${q}">${NATIVE_APP ? '공유' : '다운로드'}</button>` : '';
+    return `<tr><td>Q${i + 1}</td><td>${state}</td><td>${m.storageType || ''}</td><td class="r-iv-actions">${actions}</td></tr>`;
+  }).join('');
+  return `<div class="r-sub"><h3>사전설문</h3>${preHTML}</div>
+    <div class="r-sub"><h3>사후설문</h3>${postHTML}</div>
+    <div class="r-sub"><h3>인터뷰</h3>${Object.keys(p.interview).length
+      ? `<div class="table-wrap"><table class="r-table"><thead><tr><th>질문</th><th>상태</th><th>저장</th><th></th></tr></thead><tbody>${ivRows}</tbody></table></div>` : '<p class="r-meta">응답 없음</p>'}</div>`;
+}
+async function rPlayAudio({ id, q }) { await playRecording(id, q); }
+async function rSaveAudio({ id, q }) {
+  const m = (store.participants[id] && store.participants[id].interview[q]) || {};
+  if (!m.recorded) return;
+  if (m.storageType === 'native') {
+    if (!NATIVE_APP) { alert('이 녹음은 iPhone 실험 앱 안에 저장되어 있습니다. 앱의 연구자 모드에서 공유해 주세요.'); return; }
+    const r = await nativeAudioRequest({ type: 'interviewAudioShare', uri: m.nativeUri, fileName: m.fileName || `${id}_interview_${q}.m4a` }, 120000);
+    if (!r.ok && r.error !== 'cancelled') showToast('공유하지 못했습니다: ' + (r.error || ''));
+    return;
+  }
+  try {
+    const item = await idbGet(m.audioKey);
+    if (!item || !item.blob) { alert('녹음 파일을 찾을 수 없습니다.'); return; }
+    const url = URL.createObjectURL(item.blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${id}_interview_${q}.${extOfMime(item.blob.type)}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (e) { alert('다운로드 실패: ' + e.message); }
+}
+
+// 새 화면과 동작 등록
+Object.assign(SCREENS, {
+  preSurveyIntro: screenPreSurveyIntro, preSurvey: screenPreSurvey,
+  postSurveyIntro: screenPostSurveyIntro, postSurvey: screenPostSurvey,
+  interviewIntro: screenInterviewIntro, interview: screenInterview,
+});
+const SURVEY_ACTIONS = {
+  preSurveyStart: () => { session.progress.preSurveyPage = session.progress.preSurveyPage || 0; saveStore(); go('preSurvey', {}, { push: false }); },
+  preSurveyNext: actPreSurveyNext,
+  postSurveyStart: () => { session.progress.postSurveyIndex = session.progress.postSurveyIndex || 0; saveStore(); go('postSurvey', {}, { push: false }); },
+  postSurveyNext: actPostSurveyNext,
+  postReplay: d => { ensureAudio(); triggerWarning(d.cond); },
+  surveyPick: actSurveyPick,
+  interviewStart: actInterviewStart, recordStart: actRecordStart, recordStop: actRecordStop,
+  recordPlay: () => playRecording(session.participantId, INTERVIEW_IDS[session.progress.interviewIndex || 0]),
+  interviewSkip: actInterviewSkip, interviewNext: actInterviewNext,
+  dbgGoPre, dbgFillPre, dbgGoPost, dbgFillPost, dbgGoInterview,
+  rPreCsv, rPostCsv, rInterviewCsv, rPlayAudio, rSaveAudio,
+};
 
 /* ─── 20. 이벤트 연결 · 시작 ───────────────────────────────────── */
 const ACTIONS = {
@@ -1469,6 +2154,7 @@ const ACTIONS = {
   rCsv, rShareCsv, rJson, rDeleteOne, rWipe, rRefresh: () => renderResearcher(),
   logoTap: actLogoTap,
   closeWarning: () => closeWarningPopup(),
+  ...SURVEY_ACTIONS,
 };
 
 document.addEventListener('click', e => {
@@ -1506,6 +2192,7 @@ window.addEventListener('beforeunload', e => {
 // 콘솔 확인용
 window.MOA = {
   store, ASSIGNMENTS, CONDITION_SPEC, validateAssignments, buildExportRows, toCSV, triggerWarning,
+  recState: () => ({ ...rec, mr: undefined, stream: undefined, chunks: undefined }), idbKeys,
   state: () => ({ view: view.name, participant: session && session.participantId, task: T && { taskId: T.taskId, condition: T.condition, order: T.order, decision: T.decision } }),
 };
 

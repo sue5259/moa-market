@@ -49,6 +49,12 @@ const REUSE_ASSIGNMENT_FOR_P11_TO_P20 = true; // P11~P20 → P01~P10 배정 반�
 const REQUEST_FULLSCREEN_ON_START = true;     // 모바일에서 시작 시 전체화면(주소창 숨김)
 const DOUBLE_TAP_GUARD_MS = 300;              // 화면 전환 직후 중복 터치 무시
 
+// 실험 시작 전 공통 안내 (한 번만 표시)
+const COMMON_INTRO_TEXT = '실제 앱을 사용하는 것처럼, 평소라면 어떻게 할지 생각하면서 자유롭게 진행해 주세요. 정답은 없습니다.';
+
+// 과제별 대상 상품 (O는 구매 과제 아님). 대상 상품은 해당 과제에서 구매 가능 상태가 됨
+const TASK_PRODUCT = { N: 'tumbler', S: 'tumbler', I: 'mug', F: 'tote' };
+
 const PRICE = { tumbler: 29000, addon: 2900, budget: 29000, plusDiscount: 5000, shareDiscount: 5000 };
 
 /* ─── 2. 실험 조건 · 과제 정의 ─────────────────────────────────────── */
@@ -66,13 +72,11 @@ const TASK_IDS = Object.keys(TASK_TYPES);
 
 // 참가자에게 보이는 과제 문구 (다크패턴이라는 표현 없음)
 const TASK_TEXT = {
-  N: { instruction: '데일리 텀블러를 찾아 장바구니에 담고 구매 준비 화면까지 진행해 주세요.' },
+  N: { instruction: '데일리 텀블러를 찾아 구매를 진행해 주세요.' },
   O: { instruction: '현재 이용 중인 MOA Plus 멤버십 이용을 종료해 주세요.' },
-  S: { instruction: '29,000원 예산으로 데일리 텀블러 1개를 구매해 주세요.' },
-  I: { instruction: '추가 멤버십을 이용하지 않는 상황이라고 가정하고 데일리 텀블러 구매를 완료해 주세요.',
-       note: '지금 다른 멤버십 서비스를 이미 이용하고 있는 상황입니다.' },
-  F: { instruction: '상품 구매를 원하는 방식으로 완료해 주세요.',
-       note: '장바구니에 데일리 텀블러 1개가 담겨 있습니다.' },
+  S: { instruction: '예산 29,000원으로 데일리 텀블러 1개를 구매해 주세요.' },
+  I: { instruction: '현재 다른 멤버십 서비스를 이용하고 있는 상황입니다. 스톤 머그컵 1개를 구매해 주세요.' },
+  F: { instruction: '장바구니에 캔버스 토트백 1개가 담겨 있습니다. 구매를 완료해 주세요.' },
 };
 
 // 각 과제에서 경고·T0가 발생하는 핵심 의사결정 화면
@@ -154,12 +158,14 @@ const PRODUCTS = {
     body: '이중 진공 구조로 따뜻한 음료는 따뜻하게, 차가운 음료는 차갑게 오래 유지됩니다. 뚜껑을 돌려 잠그는 방식이라 가방에 넣어도 새지 않습니다.' },
   buds: { id: 'buds', name: 'MOA 무선 이어폰', desc: '무선 블루투스 이어폰', price: 89000, salePrice: 62300, sale: 30, available: true, art: 'buds',
     body: '가볍고 귀에 편안하게 맞는 무선 이어폰입니다. 한 번 충전으로 최대 6시간 사용할 수 있습니다.' },
-  mug: { id: 'mug', name: '스톤 머그컵', desc: '도자기 머그컵 350ml', price: 15900, available: false, art: 'mug', body: '두툼한 도자기 머그컵입니다.' },
+  mug: { id: 'mug', name: '스톤 머그컵', desc: '도자기 머그컵 350ml', price: 15900, available: false, art: 'mug', body: '두툼한 도자기로 만들어 음료가 쉽게 식지 않습니다. 전자레인지와 식기세척기에 사용할 수 있습니다.' },
   towel: { id: 'towel', name: '소프트 타월 2매', desc: '면 100% 세면 타월', price: 12900, available: false, art: 'towel', body: '부드러운 면 타월 2장 묶음입니다.' },
-  tote: { id: 'tote', name: '캔버스 토트백', desc: '두꺼운 면 캔버스 가방', price: 19800, available: false, art: 'tote', body: '튼튼한 캔버스 가방입니다.' },
+  tote: { id: 'tote', name: '캔버스 토트백', desc: '두꺼운 면 캔버스 가방', price: 19800, available: false, art: 'tote', body: '두꺼운 면 캔버스로 만들어 튼튼하고, 장보기나 외출할 때 넉넉하게 들 수 있습니다.' },
   notebook: { id: 'notebook', name: '모눈 노트', desc: '모눈 노트 A5', price: 6500, available: false, art: 'notebook', body: '모눈 노트입니다.' },
 };
 const productPrice = p => p.salePrice || p.price;
+// 기본 판매 상품(텀블러·이어폰) + 현재 과제의 대상 상품만 구매 가능. 나머지는 품절 표시
+const isAvailable = p => p.available || (!!T && TASK_PRODUCT[T.taskId] === p.id);
 
 /* ─── 5. 환경 · 유틸 ─────────────────────────────────────────────── */
 const PARAMS = new URLSearchParams(location.search);
@@ -447,7 +453,7 @@ function recordDecision(choice) {
 function newTaskState(taskId, condition, order) {
   return {
     taskId, condition, order, startedAt: iso(), startPerf: performance.now(),
-    cart: taskId === 'F' ? [{ id: 'tumbler' }] : [],
+    cart: taskId === 'F' ? [{ id: TASK_PRODUCT.F }] : [],
     member: taskId === 'O',
     orderItems: [],
     nag1Shown: false, nag1Open: false, nagIntent: null,
@@ -601,6 +607,13 @@ function debugStartTools() {
     <p style="margin-top:10px"><a href="?researcher=1">연구자 모드 열기</a></p>
   </section>`;
 }
+function screenCommonIntro() {
+  return `<main class="screen center-screen"><div class="intro-card">
+    <p class="step-label">시작하기 전에</p>
+    <p class="task-box-text" style="margin:16px 0 28px">${COMMON_INTRO_TEXT}</p>
+    <button class="btn btn-primary btn-xl" data-act="commonIntroNext">다음</button>
+  </div></main>`;
+}
 function screenTaskIntro() {
   const idx = session.currentIndex;
   const a = session.assignment[idx];
@@ -659,7 +672,7 @@ function screenEnd() {
 }
 // 인지 확인용 미리보기: 경고 없이(빈 경고 영역) 핵심 화면을 다시 그림
 function decisionPreview(taskId) {
-  const ctx = { taskId, condition: 'NW', decision: null, addon: true, orderItems: ['tumbler'], plusTrial: false, shared: false };
+  const ctx = { taskId, condition: 'NW', decision: null, addon: true, orderItems: [TASK_PRODUCT[taskId] || 'tumbler'], plusTrial: false, shared: false };
   switch (taskId) {
     case 'N': return screenNagSecond({}, ctx, true);
     case 'O': return screenRetention({}, ctx, true);
@@ -675,7 +688,7 @@ function productCard(id) {
   const p = PRODUCTS[id];
   return `<button class="pcard" data-act="openProduct" data-id="${id}">${art(p.art)}
     <p class="pcard-name">${p.name}</p>
-    <p class="pcard-price">${won(p.price)}${p.available ? '' : '<span class="tag-soldout">품절</span>'}</p></button>`;
+    <p class="pcard-price">${won(p.price)}${isAvailable(p) ? '' : '<span class="tag-soldout">품절</span>'}</p></button>`;
 }
 function screenHome() {
   return `<div class="screen has-nav">${topBar({ logo: true, back: false })}
@@ -693,7 +706,7 @@ function screenList() {
     const p = PRODUCTS[id];
     return `<li><button class="plist-row" data-act="openProduct" data-id="${id}">${art(p.art)}<div>
       <p class="plist-name">${p.name}</p><p class="plist-desc">${p.desc}</p>
-      <p class="plist-price">${won(p.price)}${p.available ? '' : '<span class="tag-soldout">품절</span>'}</p></div></button></li>`;
+      <p class="plist-price">${won(p.price)}${isAvailable(p) ? '' : '<span class="tag-soldout">품절</span>'}</p></div></button></li>`;
   };
   return `<div class="screen has-nav">${topBar({ title: '생활용품' })}
     <main class="content"><p class="muted" style="margin-bottom:10px">상품 ${ids.length}개</p><ul class="plist">${ids.map(row).join('')}</ul></main>
@@ -702,7 +715,7 @@ function screenList() {
 function screenDetail({ id }) {
   const p = PRODUCTS[id] || PRODUCTS.tumbler;
   const showNag1 = T && T.taskId === 'N' && T.nag1Open && id === 'tumbler';
-  const actions = p.available
+  const actions = isAvailable(p)
     ? `<div class="btn-row"><button class="btn btn-secondary" data-act="addToCart" data-id="${p.id}">장바구니 담기</button>
        <button class="btn btn-primary" data-act="buyNow" data-id="${p.id}">구매하기</button></div>`
     : '<button class="btn btn-secondary" disabled>일시품절</button>';
@@ -733,7 +746,7 @@ function screenCart() {
     </main>${bottomNav('cart')}</div>`;
 }
 function orderSummary(ctx) {
-  const ids = ctx.orderItems && ctx.orderItems.length ? ctx.orderItems : ['tumbler'];
+  const ids = ctx.orderItems && ctx.orderItems.length ? ctx.orderItems : [TASK_PRODUCT[ctx.taskId] || 'tumbler'];
   const items = ids.map(id => PRODUCTS[id]);
   const subtotal = items.reduce((s, p) => s + productPrice(p), 0);
   const addon = ctx.taskId === 'S' && ctx.addon ? PRICE.addon : 0;
@@ -854,7 +867,7 @@ function screenCancelConfirm() {
 }
 // TASK 04 Interface Interference — 강조된 체험 vs 약한 일반 구매
 function screenPlusOffer(_, ctx = T, preview = false) {
-  const price = PRICE.tumbler;
+  const price = orderSummary(ctx).subtotal;   // 주문하려는 상품 가격
   return `<div class="screen">${topBar({ title: '주문하기', back: false, preview })}
     <main class="content">
       <section class="card hero-center">${art('plus')}
@@ -890,7 +903,7 @@ function screenShareDone() {
 }
 
 const SCREENS = {
-  start: screenStart, taskIntro: screenTaskIntro, taskDone: screenTaskDone,
+  start: screenStart, commonIntro: screenCommonIntro, taskIntro: screenTaskIntro, taskDone: screenTaskDone,
   recogIntro: screenRecogIntro, recog: screenRecog, end: screenEnd,
   home: screenHome, list: screenList, detail: screenDetail, cart: screenCart, checkout: screenCheckout,
   orderDone: screenOrderDone, my: screenMy, plus: screenPlus, plusManage: screenPlusManage,
@@ -951,7 +964,8 @@ function enterSession(p, resumed) {
   startDraft = ''; startError = '';
   requestWakeLock();
   maybeFullscreen();
-  if (p.phase === 'tasks') go('taskIntro', {}, { push: false });
+  // 공통 안내는 첫 과제를 아직 시작하지 않았을 때 한 번만
+  if (p.phase === 'tasks') go(p.currentIndex === 0 && !Object.keys(p.attempts).length ? 'commonIntro' : 'taskIntro', {}, { push: false });
   else if (p.phase === 'recognition') { recogDraft = { yes: null, text: '' }; go(p.recogIndex === 0 ? 'recogIntro' : 'recog', {}, { push: false }); }
 }
 function actBeginTask() {
@@ -1107,7 +1121,7 @@ function actPay() {
   } else if ((T.taskId === 'I' || T.taskId === 'F') && T.decision && T.decision.choice) {
     finishTask({
       resistance: CHOICE_RESISTANCE[T.taskId][T.decision.choice],
-      taskSuccess: 1,
+      taskSuccess: s.items.some(p => p.id === TASK_PRODUCT[T.taskId]) ? 1 : 0,   // 대상 상품 구매 완료
       extra: { paidAmount: s.total, orderItems: s.items.map(p => p.id).join('|') },
     });
   } else {
@@ -1433,6 +1447,7 @@ function rImport(file) {
 /* ─── 20. 이벤트 연결 · 시작 ───────────────────────────────────── */
 const ACTIONS = {
   beginTask: actBeginTask, afterTask: actAfterTask,
+  commonIntroNext: () => go('taskIntro', {}, { push: false }),
   startRecognition: () => { recogDraft = { yes: null, text: '' }; go('recog', {}, { push: false }); },
   recogAnswer: actRecogAnswer, recogNext: actRecogNext,
   openInstruction: actOpenInstruction, testWarning: actTestWarning,

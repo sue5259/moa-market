@@ -251,13 +251,17 @@ ul { margin: 0; padding: 0; list-style: none; }
 .dp-title { font-size: 25px; font-weight: 800; line-height: 1.35; margin: 4px 0 16px; }
 .dp-lead { font-size: 18px; color: var(--sub); }
 .offer-card { display: flex; gap: 14px; align-items: center; }
-.offer-card .art { width: 104px; height: 104px; flex: none; border-radius: 14px; }
+.offer-card .art { width: 96px; height: 96px; flex: none; border-radius: 14px; }
+.offer-price { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; margin-top: 4px; }
+.offer-price > * { white-space: nowrap; }
+.offer-price b { font-size: 22px; }
 .sale-pill { display: inline-block; padding: 2px 10px; border-radius: 999px; background: #FDE7DC; color: var(--sale); font-weight: 800; font-size: 16px; }
-.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.stat { background: #fff; border: 1px solid #E4E7EB; border-radius: var(--radius); padding: 16px 14px; }
+.stat-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.stat { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #fff; border: 1px solid #E4E7EB; border-radius: var(--radius); padding: 16px; }
 .stat-accent { background: var(--brand-soft); border-color: #BFDDD6; }
-.stat-label { font-size: 16px; color: var(--sub); font-weight: 600; }
-.stat-value { font-size: 23px; font-weight: 800; margin-top: 4px; }
+.stat-label { font-size: 17px; color: var(--sub); font-weight: 600; }
+.stat-value { font-size: 23px; font-weight: 800; white-space: nowrap; flex: none; }
+.stat-pre { font-size: 17px; font-weight: 700; color: var(--sub); }
 .lose-list { margin-top: 16px; }
 .lose-list li { padding: 8px 0 8px 28px; position: relative; color: var(--sub); }
 .lose-list li::before { content: "–"; position: absolute; left: 8px; color: var(--muted); }
@@ -442,3 +446,5 @@ body.is-researcher #app { max-width: 1200px; background: #F6F7F9; }
 #debugPanel, .dbg-body { pointer-events: none; }
 .dbg-toggle, .dbg-body button, .dbg-body summary, .dbg-body a, .dbg-body details[open] pre { pointer-events: auto; }
 .mic-code { margin: -4px 0 12px; text-align: center; font-size: 16px; color: var(--muted); }
+
+.q-help { margin-top: 4px; font-size: 17px; color: var(--sub); }

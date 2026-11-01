@@ -77,7 +77,7 @@ const TASK_TEXT = {
   N: { instruction: '데일리 텀블러를 구매하려고 하는 상황입니다. 구매를 진행해 주세요.' },
   O: { instruction: '현재 이용 중인 MOA Plus 멤버십을 종료하려고 하는 상황입니다. 멤버십 종료를 진행해 주세요.' },
   S: { instruction: '예산 29,000원 안에서 데일리 텀블러 1개를 구매하려고 하는 상황입니다. 구매를 진행해 주세요.' },
-  I: { instruction: '현재 별도의 멤버십 서비스를 이용 중이며, 스톤 머그컵 1개를 구매하려고 하는 상황입니다. 구매를 진행해 주세요.' },
+  I: { instruction: '스톤 머그컵 1개를 구매하려고 하는 상황입니다. 구매를 진행해 주세요.' },
   F: { instruction: '장바구니에 캔버스 토트백 1개가 담겨 있고, 이 상품을 구매하려고 하는 상황입니다. 구매를 진행해 주세요.' },
 };
 
@@ -507,7 +507,7 @@ function finishTask(outcome) {
     hapticError: d.hapticError === 'awaiting_app_ack' ? 'no_app_ack' : (d.hapticError || ''),
     hapticAckLatencyMs: d.hapticAckLatencyMs ?? '',
     optionChanged: '', optionChangeTime: '', optionToggleCount: '', finalOptionSelected: '',
-    paidAmount: '', finalCancellationCompleted: '', finalChoice: '', budsSelected: '', orderItems: '',
+    paidAmount: '', finalCancellationCompleted: '', finalChoice: '', budsSelected: '', nagFirstChoice: '', orderItems: '',
     t0Ms: round1(d.t0), t1Ms: round1(d.t1),
     decisionShownAt: d.shownAt || '', decisionMadeAt: d.madeAt || '',
     taskStartedAt: T.startedAt,
@@ -738,7 +738,10 @@ function screenDetail({ id }) {
     </main>
     ${showNag1 ? `<div class="sheet-backdrop"><div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet-row">${art('slim')}<p class="sheet-text">${PRODUCTS.slim.name}가 현재 30% 할인 중입니다.</p></div>
-      <button class="btn btn-primary btn-xl" data-act="closeNagFirst">계속 쇼핑하기</button></div></div>` : ''}
+      <div class="btn-stack" style="margin-top:0">
+        <button class="btn btn-primary btn-xl" data-act="nagFirstView">상품 확인하러 가기</button>
+        <button class="btn btn-secondary btn-xl" data-act="closeNagFirst">계속 쇼핑하기</button>
+      </div></div></div>` : ''}
   </div>`;
 }
 function screenCart() {
@@ -840,7 +843,7 @@ function screenNagSecond(_, ctx = T, preview = false) {
       <h2 class="dp-title">할인 상품을 다시 확인해보세요</h2>
       <section class="card offer-card">${art('slim')}<div>
         <p class="item-name" style="font-size:20px">${b.name}</p><span class="sale-pill">30% 할인</span>
-        <p style="margin-top:4px"><span class="strike">${won(b.price)}</span> <b style="font-size:22px">${won(b.salePrice)}</b></p>
+        <p class="offer-price"><span class="strike">${won(b.price)}</span><b>${won(b.salePrice)}</b></p>
       </div></section>
       <div class="btn-stack">
         <button class="btn btn-primary btn-xl" data-act="nagChoice" data-c="view_discount" ${pv(preview)}>할인 상품 보기</button>
@@ -855,7 +858,7 @@ function screenRetention(_, ctx = T, preview = false) {
       <h2 class="dp-title">정말 혜택을 포기하시겠어요?</h2>
       <div class="stat-grid">
         <div class="stat"><p class="stat-label">이번 달 받은 혜택</p><p class="stat-value">13,700원</p></div>
-        <div class="stat stat-accent"><p class="stat-label">앞으로 받을 수 있는 혜택</p><p class="stat-value">최대 25,000원</p></div>
+        <div class="stat stat-accent"><p class="stat-label">앞으로 받을 수 있는 혜택</p><p class="stat-value"><span class="stat-pre">최대</span> 25,000원</p></div>
       </div>
       <ul class="lose-list"><li>무료배송 혜택이 사라져요</li><li>구매 금액 5% 적립이 중단돼요</li><li>회원 전용 할인가를 받을 수 없어요</li></ul>
       <div class="btn-stack">
@@ -1019,9 +1022,18 @@ function actOpenProduct({ id }) {
   }
   go('detail', { id });
 }
+// 1차 추천에서 '상품 확인하러 가기' (측정 대상 아님, 2차 추천 화면은 그대로 유지)
+function actNagFirstView() {
+  if (!T || !T.nag1Open) return;
+  T.nag1Open = false;
+  T.nagFirstChoice = 'view_product';
+  logEvent('nag_first_view_product');
+  go('detail', { id: 'slim' });
+}
 function actCloseNagFirst() {
   if (!T) return;
   T.nag1Open = false;
+  T.nagFirstChoice = 'continue_shopping';
   logEvent('nag_first_closed');
   render({ keepScroll: true });
 }
@@ -1069,7 +1081,7 @@ function finishNagging() {
     resistance: d ? CHOICE_RESISTANCE.N[d.choice] : '',
     taskSuccess: items.includes('tumbler') ? 1 : 0,
     extra: { budsSelected: items.includes('slim') ? 1 : 0,   // 열 이름은 기존 유지: 추천 상품(슬림 텀블러) 담김 여부
-                 orderItems: items.join('|') },
+                 nagFirstChoice: T.nagFirstChoice || '', orderItems: items.join('|') },
   });
   endTaskView();
 }
@@ -1284,7 +1296,7 @@ const CSV_COLUMNS = [
   'choice', 'resistance', 'responseTimeMs', 'responseTimeSec', 'taskSuccess',
   'visualShown', 'audioTriggered', 'audioPreset', 'audioContextState', 'hapticSupported', 'hapticMethod', 'hapticTriggered', 'hapticAckLatencyMs', 'hapticError',
   'optionChanged', 'optionChangeTime', 'optionToggleCount', 'finalOptionSelected', 'paidAmount',
-  'finalCancellationCompleted', 'finalChoice', 'budsSelected', 'orderItems',
+  'finalCancellationCompleted', 'finalChoice', 'budsSelected', 'nagFirstChoice', 'orderItems',
   'recognitionYesNo', 'recognitionText', 'attempts',
   't0Ms', 't1Ms', 'decisionShownAt', 'decisionMadeAt', 'taskStartedAt', 'timestamp',
   'userAgent', 'screenWidth', 'screenHeight', 'events',
@@ -1466,19 +1478,18 @@ function rImport(file) {
 
 /* ─── 19-A. 사전설문 · 사후설문 · 사후 인터뷰(음성 녹음) ──────────────── */
 const LIKERT_AGREE = ['전혀 그렇지 않다', '그렇지 않다', '보통이다', '그렇다', '매우 그렇다'];
-const LIKERT_FREQ = ['전혀 이용하지 않는다', '거의 이용하지 않는다', '가끔 이용한다', '자주 이용한다', '매우 자주 이용한다'];
 
 // 사전설문 (3개 화면)
 const PRE_SURVEY_PAGES = [
   [
-    { key: 'age', type: 'number', text: '현재 연령을 입력해 주세요.' },
-    { key: 'smartphoneYears', type: 'choice', text: '스마트폰을 사용한 기간은 얼마나 되셨나요?',
-      options: [['lt1', '1년 미만'], ['1to3', '1년 이상 ~ 3년 미만'], ['3to5', '3년 이상 ~ 5년 미만'], ['5plus', '5년 이상']] },
+    { key: 'age', type: 'number', text: '현재 나이를 만 나이 기준으로 입력해 주세요.' },
     { key: 'dailyUse', type: 'choice', text: '하루 평균 스마트폰을 얼마나 사용하시나요?',
       options: [['lt1', '1시간 미만'], ['1to3', '1~3시간'], ['3to5', '3~5시간'], ['5plus', '5시간 이상']] },
   ],
   [
-    { key: 'shoppingFrequency', type: 'scale', labels: LIKERT_FREQ, text: '스마트폰으로 온라인 쇼핑을 얼마나 자주 이용하시나요?' },
+    // 저장값 1~5 (빈도 순서). 1=한 달에 1번 미만 … 5=일주일에 4번 이상
+    { key: 'shoppingFrequency', type: 'choice', text: '스마트폰으로 온라인 쇼핑을 얼마나 자주 이용하시나요?',
+      options: [[1, '한 달에 1번 미만 (거의 이용하지 않음)'], [2, '한 달에 1~3번'], [3, '일주일에 1번 정도'], [4, '일주일에 2~3번'], [5, '일주일에 4번 이상']] },
     { key: 'subscriptionExperience', type: 'choice', text: '모바일 앱에서 유료 멤버십이나 정기구독 서비스를 이용해 본 경험이 있나요?',
       options: [[1, '있다'], [0, '없다']] },
     { key: 'mobilePaymentFamiliarity', type: 'scale', labels: LIKERT_AGREE, text: '스마트폰으로 상품을 구매하거나 결제하는 데 익숙하다.' },
@@ -1562,7 +1573,7 @@ function screenPreSurvey() {
   const blocks = PRE_SURVEY_PAGES[page].map((q, i) => {
     let body = '';
     if (q.type === 'number') {
-      body = `<div class="age-row"><input id="ageInput" class="age-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3"
+      body = `<p class="q-help">예: 1958년 3월생이면 올해 생일이 지났을 때 68세</p><div class="age-row"><input id="ageInput" class="age-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3"
         value="${ans.age ?? ''}" aria-label="연령"><span class="age-unit">세</span></div>`;
     } else if (q.type === 'choice') body = optionList('pre', q, ans[q.key]);
     else body = scaleButtons('pre', q.key, q.labels, ans[q.key]);
@@ -2012,7 +2023,7 @@ function dbgNeedSession() {
 function dbgGoPre() { if (!dbgNeedSession()) return; T = null; session.phase = 'preSurvey'; session.progress.preSurveyPage = 0; saveStore(); go('preSurveyIntro', {}, { push: false }); }
 function dbgFillPre() {
   if (!dbgNeedSession()) return;
-  Object.assign(session.preSurvey, { age: 68, smartphoneYears: '5plus', dailyUse: '1to3', shoppingFrequency: 3, subscriptionExperience: 1,
+  Object.assign(session.preSurvey, { age: 68, dailyUse: '1to3', shoppingFrequency: 3, subscriptionExperience: 1,
     mobilePaymentFamiliarity: 4, menuFindingConfidence: 3, settingsFamiliarity: 3 });
   session.phase = 'preSurvey'; saveStore(); T = null;
   go('preSurvey', {}, { push: false });
@@ -2154,7 +2165,7 @@ const ACTIONS = {
   go: d => go(d.to, d.id ? { id: d.id } : {}),
   tab: d => { navStack = []; go(d.to, {}, { push: false }); },
   back: () => { if (canGoBack()) goBack(); },
-  openProduct: actOpenProduct, closeNagFirst: actCloseNagFirst,
+  openProduct: actOpenProduct, closeNagFirst: actCloseNagFirst, nagFirstView: actNagFirstView,
   addToCart: actAddToCart, buyNow: actBuyNow, orderFromCart: actOrderFromCart,
   nagChoice: actNagChoice, toggleAddon: actToggleAddon, pay: actPay, orderDoneOk: actOrderDoneOk,
   startCancel: actStartCancel, retentionChoice: actRetentionChoice, finalCancel: actFinalCancel,

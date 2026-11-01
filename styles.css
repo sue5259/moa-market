@@ -17,7 +17,6 @@
   --warn-bg: #FFF4C2;
   --warn-line: #D99A00;
   --warn-text: #3B2A00;
-  --warning-slot-h: 96px;   /* NW 조건에서도 동일하게 확보되는 높이 */
 
   --radius: 14px;
   --font: system-ui, -apple-system, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
@@ -112,18 +111,33 @@ ul { margin: 0; padding: 0; list-style: none; }
 }
 .btn-hero { min-height: 72px; font-size: 21px; border-radius: 14px; box-shadow: 0 6px 16px rgba(15, 107, 92, 0.28); }
 
-/* ---------- 공통 시각 경고 ---------- */
-.warning-slot { height: var(--warning-slot-h); padding: 12px 16px 0; background: var(--bg); }
-.warning-box {
-  height: 100%;
-  display: flex; align-items: center; gap: 12px;
-  padding: 8px 14px;
-  border: 2px solid var(--warn-line); border-left-width: 8px; border-radius: 12px;
-  background: var(--warn-bg); color: var(--warn-text);
-  font-size: clamp(16px, 4.6vw, 18px); font-weight: 700; line-height: 1.4;
-  overflow: hidden;
+/* ---------- 공통 시각 경고 팝업 (V·VA·VH·VAH 동일) ---------- */
+.warn-backdrop {
+  position: fixed; inset: 0; z-index: 55;          /* 화면 위에 겹침 → 배치 변화 없음 */
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+  background: rgba(15, 20, 25, 0.42);              /* 뒤 화면이 비쳐 보이는 정도의 어둡기 */
 }
-.warning-icon { font-size: 26px; line-height: 1; flex: none; }
+.warn-card {
+  position: relative; width: min(360px, 100%);
+  padding: 22px 18px 24px; border-radius: 18px;
+  background: #fff; border-top: 6px solid var(--warn-line);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+}
+.warn-close {
+  position: absolute; top: 6px; right: 6px;
+  width: 48px; height: 48px;                       /* 실제 터치 영역 48×48 */
+  display: flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 12px; background: transparent; color: #434A53;
+}
+.warn-close:active { background: #F1F3F5; }
+.warn-close svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+.warn-title {
+  display: flex; align-items: center; gap: 8px;
+  padding-right: 42px;                             /* X 버튼과 겹치지 않게 */
+  font-size: clamp(18px, 5vw, 20px); font-weight: 800; line-height: 1.35; color: var(--warn-text);
+}
+.warn-icon { width: 28px; height: 28px; flex: none; }
+.warn-body { margin-top: 12px; font-size: 18px; line-height: 1.55; color: var(--sub); }
 
 /* ---------- 하단 탭 ---------- */
 .bottom-nav {
@@ -205,7 +219,6 @@ ul { margin: 0; padding: 0; list-style: none; }
 .modal { width: 100%; max-width: 420px; background: #fff; border-radius: 18px; padding: 24px 20px; max-height: 90vh; overflow: auto; }
 .modal-title { font-size: 21px; font-weight: 800; margin-bottom: 10px; }
 .modal-body { color: var(--sub); }
-.modal-body .warning-slot { padding: 0; background: none; margin-bottom: 10px; }
 .modal-actions { display: flex; flex-direction: column; gap: 12px; margin-top: 20px; }
 .modal-actions .btn + .btn { margin-top: 0; }
 

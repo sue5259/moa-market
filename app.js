@@ -10,7 +10,9 @@
    ===================================================================== */
 
 /* ─── 1. 실험 설정값 (여기서만 바꾸면 됩니다) ───────────────────────── */
-const WARNING_TEXT = '선택하기 전에 화면의 정보를 다시 확인해 주세요.';
+// 시각 경고 팝업 문구 (V·VA·VH·VAH 모두 동일)
+const WARNING_TITLE = '선택하기 전에 확인해 주세요';
+const WARNING_BODY  = '화면의 정보를 다시 살펴보고,<br>원하는 선택이 맞는지 확인해 주세요.';
 
 const WARNING_AUDIO_FREQUENCY = 880;     // Hz   ('single' 소리에 사용)
 const WARNING_AUDIO_DURATION  = 180;     // ms
@@ -64,13 +66,13 @@ const TASK_IDS = Object.keys(TASK_TYPES);
 
 // 참가자에게 보이는 과제 문구 (다크패턴이라는 표현 없음)
 const TASK_TEXT = {
-  N: { instruction: 'Daily Tumbler를 찾아 장바구니에 담고 구매 준비 화면까지 진행해 주세요.' },
+  N: { instruction: '데일리 텀블러를 찾아 장바구니에 담고 구매 준비 화면까지 진행해 주세요.' },
   O: { instruction: '현재 이용 중인 MOA Plus 멤버십 이용을 종료해 주세요.' },
-  S: { instruction: '29,000원 예산으로 Daily Tumbler 1개를 구매해 주세요.' },
-  I: { instruction: '추가 멤버십을 이용하지 않는 상황이라고 가정하고 Daily Tumbler 구매를 완료해 주세요.',
+  S: { instruction: '29,000원 예산으로 데일리 텀블러 1개를 구매해 주세요.' },
+  I: { instruction: '추가 멤버십을 이용하지 않는 상황이라고 가정하고 데일리 텀블러 구매를 완료해 주세요.',
        note: '지금 다른 멤버십 서비스를 이미 이용하고 있는 상황입니다.' },
   F: { instruction: '상품 구매를 원하는 방식으로 완료해 주세요.',
-       note: '장바구니에 Daily Tumbler 1개가 담겨 있습니다.' },
+       note: '장바구니에 데일리 텀블러 1개가 담겨 있습니다.' },
 };
 
 // 각 과제에서 경고·T0가 발생하는 핵심 의사결정 화면
@@ -148,14 +150,14 @@ function validateAssignments() {
 
 /* ─── 4. 상품 데이터 ─────────────────────────────────────────────── */
 const PRODUCTS = {
-  tumbler: { id: 'tumbler', name: 'Daily Tumbler', desc: '보온·보냉 스테인리스 텀블러 473ml', price: 29000, available: true, art: 'tumbler',
+  tumbler: { id: 'tumbler', name: '데일리 텀블러', desc: '보온·보냉 스테인리스 텀블러 473ml', price: 29000, available: true, art: 'tumbler',
     body: '이중 진공 구조로 따뜻한 음료는 따뜻하게, 차가운 음료는 차갑게 오래 유지됩니다. 뚜껑을 돌려 잠그는 방식이라 가방에 넣어도 새지 않습니다.' },
-  buds: { id: 'buds', name: 'MOA Buds', desc: '무선 블루투스 이어폰', price: 89000, salePrice: 62300, sale: 30, available: true, art: 'buds',
+  buds: { id: 'buds', name: 'MOA 무선 이어폰', desc: '무선 블루투스 이어폰', price: 89000, salePrice: 62300, sale: 30, available: true, art: 'buds',
     body: '가볍고 귀에 편안하게 맞는 무선 이어폰입니다. 한 번 충전으로 최대 6시간 사용할 수 있습니다.' },
-  mug: { id: 'mug', name: 'Stone Mug', desc: '도자기 머그컵 350ml', price: 15900, available: false, art: 'mug', body: '두툼한 도자기 머그컵입니다.' },
-  towel: { id: 'towel', name: 'Soft Towel 2매', desc: '면 100% 세면 타월', price: 12900, available: false, art: 'towel', body: '부드러운 면 타월 2장 묶음입니다.' },
-  tote: { id: 'tote', name: 'Canvas Tote Bag', desc: '두꺼운 면 캔버스 가방', price: 19800, available: false, art: 'tote', body: '튼튼한 캔버스 가방입니다.' },
-  notebook: { id: 'notebook', name: 'Grid Notebook', desc: '모눈 노트 A5', price: 6500, available: false, art: 'notebook', body: '모눈 노트입니다.' },
+  mug: { id: 'mug', name: '스톤 머그컵', desc: '도자기 머그컵 350ml', price: 15900, available: false, art: 'mug', body: '두툼한 도자기 머그컵입니다.' },
+  towel: { id: 'towel', name: '소프트 타월 2매', desc: '면 100% 세면 타월', price: 12900, available: false, art: 'towel', body: '부드러운 면 타월 2장 묶음입니다.' },
+  tote: { id: 'tote', name: '캔버스 토트백', desc: '두꺼운 면 캔버스 가방', price: 19800, available: false, art: 'tote', body: '튼튼한 캔버스 가방입니다.' },
+  notebook: { id: 'notebook', name: '모눈 노트', desc: '모눈 노트 A5', price: 6500, available: false, art: 'notebook', body: '모눈 노트입니다.' },
 };
 const productPrice = p => p.salePrice || p.price;
 
@@ -315,14 +317,32 @@ window.__moaNative = msg => {
   }
 };
 
-const WARNING_HTML =
-  `<div class="warning-box" role="alert"><span class="warning-icon" aria-hidden="true">⚠</span>` +
-  `<span class="warning-text">${WARNING_TEXT}</span></div>`;
+// 시각 경고 팝업: 의사결정 화면 위에 살짝 어두운 배경 + 가운데 경고 카드 + 오른쪽 위 X 닫기
+// 화면 배치에 영향을 주지 않는 겹침(overlay) 방식이라 조건에 따라 버튼 위치가 달라지지 않는다.
+const warningRoot = document.getElementById('warningRoot');
+const WARNING_POPUP_HTML = `<div class="warn-backdrop">
+  <div class="warn-card" role="alertdialog" aria-modal="true" aria-labelledby="warnTitle" aria-describedby="warnBody">
+    <button type="button" class="warn-close" data-act="closeWarning" aria-label="경고 닫기">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <h2 class="warn-title" id="warnTitle">
+      <svg class="warn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3L2 21h20z" fill="#F2A900" stroke="#B37A00" stroke-width="1.2" stroke-linejoin="round"/><path d="M12 9.5v5" stroke="#2B1F00" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="17.6" r="1.25" fill="#2B1F00"/></svg>
+      <span>${WARNING_TITLE}</span>
+    </h2>
+    <p class="warn-body" id="warnBody">${WARNING_BODY}</p>
+  </div>
+</div>`;
+function showWarningPopup() {
+  warningRoot.innerHTML = WARNING_POPUP_HTML;
+  return true;
+}
+// X 버튼: 팝업만 닫음 (실험 응답으로 기록하지 않음, T0/T1 측정에 영향 없음)
+function closeWarningPopup() { warningRoot.innerHTML = ''; }
 
 /**
  * 모든 조건을 처리하는 단일 경고 함수.
  * NW → 없음 / V → 시각 / VA → 시각+청각 / VH → 시각+진동 / VAH → 시각+청각+진동
- * 시각 경고는 화면의 #warningSlot(높이 고정)에 채워 넣는다.
+ * 시각 경고는 의사결정 화면 위에 팝업으로 겹쳐 표시한다 (모든 시각 조건에서 동일).
  */
 function triggerWarning(condition) {
   const spec = CONDITION_SPEC[condition];
@@ -332,8 +352,7 @@ function triggerWarning(condition) {
   };
   if (!spec) return r;
   if (spec.visual) {
-    const slot = document.getElementById('warningSlot');
-    if (slot) { slot.innerHTML = WARNING_HTML; r.visualShown = true; }
+    r.visualShown = showWarningPopup();
   }
   if (spec.audio) {
     const a = playWarningTone();
@@ -373,9 +392,11 @@ const PUSHABLE = new Set(['home', 'list', 'detail', 'cart', 'checkout', 'my', 'p
 const BACKABLE = new Set(['list', 'detail', 'cart', 'checkout', 'my', 'plus', 'plusManage']);
 
 function canGoBack() {
-  return !!T && !T.finished && BACKABLE.has(view.name) && !(view.name === 'checkout' && T.taskId === 'S');
+  // 이전 화면이 있을 때만 '이전' 버튼 표시 (과제 시작 화면이나 하단 탭으로 연 화면에서는 숨김)
+  return !!T && !T.finished && navStack.length > 0 && BACKABLE.has(view.name) && !(view.name === 'checkout' && T.taskId === 'S');
 }
 function go(name, params = {}, opts = {}) {
+  closeWarningPopup();
   const push = opts.push !== false;
   if (push && PUSHABLE.has(view.name)) navStack.push(view);
   view = { name, params };
@@ -383,6 +404,7 @@ function go(name, params = {}, opts = {}) {
   render();
 }
 function goBack() {
+  closeWarningPopup();
   view = navStack.pop() || { name: 'home', params: {} };
   if (T) logEvent('back', { to: view.name });
   render();
@@ -535,11 +557,6 @@ function bottomNav(active) {
   const tab = (to, ic, label) =>
     `<button class="nav-item ${active === to ? 'is-active' : ''}" data-act="tab" data-to="${to}">${icon(ic)}<span>${label}</span>${to === 'cart' && count ? `<span class="badge">${count}</span>` : ''}</button>`;
   return `<nav class="bottom-nav" aria-label="메뉴">${tab('home', 'home', '홈')}${tab('list', 'grid', '카테고리')}${tab('cart', 'cart', '장바구니')}${tab('my', 'user', 'MY')}</nav>`;
-}
-// 경고 영역: 모든 의사결정 화면 상단, 높이 고정. NW·미리보기에서는 빈 영역만 확보.
-function warningSlot(ctx, preview) {
-  const filled = !preview && ctx && ctx.decision && ctx.decision.visualShown;
-  return `<div class="warning-slot" ${preview ? '' : 'id="warningSlot"'}>${filled ? WARNING_HTML : ''}</div>`;
 }
 function priceHTML(p) {
   return p.sale
@@ -699,7 +716,7 @@ function screenDetail({ id }) {
       ${actions}
     </main>
     ${showNag1 ? `<div class="sheet-backdrop"><div class="sheet" role="dialog" aria-modal="true">
-      <div class="sheet-row">${art('buds')}<p class="sheet-text">MOA Buds가 현재 30% 할인 중입니다.</p></div>
+      <div class="sheet-row">${art('buds')}<p class="sheet-text">${PRODUCTS.buds.name}이 현재 30% 할인 중입니다.</p></div>
       <button class="btn btn-primary btn-xl" data-act="closeNagFirst">계속 쇼핑하기</button></div></div>` : ''}
   </div>`;
 }
@@ -742,7 +759,6 @@ function screenCheckout(_, ctx = T, preview = false) {
         <span class="check-box">${ctx.addon ? icon('check', 3) : ''}</span><span>안심 배송 <b>+${won(PRICE.addon)}</b></span></button>
       <p class="muted small">배송 중 파손·분실 시 상품 금액을 보상해 드립니다.</p></section>` : '';
   return `<div class="screen">${topBar({ title: '주문 / 결제', back: preview ? false : (isDecision ? false : undefined), preview })}
-    ${isDecision ? warningSlot(ctx, preview) : ''}
     <main class="content">
       <section class="card"><h2 class="card-title">주문 상품</h2>${s.items.map(itemRow).join('')}</section>
       ${addon}
@@ -798,7 +814,7 @@ function screenPlusManage() {
 // TASK 01 Nagging — 2차 추천
 function screenNagSecond(_, ctx = T, preview = false) {
   const b = PRODUCTS.buds;
-  return `<div class="screen">${topBar({ title: '추천 상품', back: false, preview })}${warningSlot(ctx, preview)}
+  return `<div class="screen">${topBar({ title: '추천 상품', back: false, preview })}
     <main class="content">
       <h2 class="dp-title">할인 상품을 다시 확인해보세요</h2>
       <section class="card offer-card">${art('buds')}<div>
@@ -813,7 +829,7 @@ function screenNagSecond(_, ctx = T, preview = false) {
 }
 // TASK 02 Obstruction — 혜택 유지 권유
 function screenRetention(_, ctx = T, preview = false) {
-  return `<div class="screen">${topBar({ title: '멤버십 해지', back: false, preview })}${warningSlot(ctx, preview)}
+  return `<div class="screen">${topBar({ title: '멤버십 해지', back: false, preview })}
     <main class="content">
       <h2 class="dp-title">정말 혜택을 포기하시겠어요?</h2>
       <div class="stat-grid">
@@ -839,7 +855,7 @@ function screenCancelConfirm() {
 // TASK 04 Interface Interference — 강조된 체험 vs 약한 일반 구매
 function screenPlusOffer(_, ctx = T, preview = false) {
   const price = PRICE.tumbler;
-  return `<div class="screen">${topBar({ title: '주문하기', back: false, preview })}${warningSlot(ctx, preview)}
+  return `<div class="screen">${topBar({ title: '주문하기', back: false, preview })}
     <main class="content">
       <section class="card hero-center">${art('plus')}
         <h2 class="dp-title" style="margin-bottom:4px">MOA Plus로 더 저렴하게 구매하세요</h2>
@@ -857,7 +873,7 @@ function screenPlusStarted() {
 }
 // TASK 05 Forced Action — 공유 요구
 function screenShareOffer(_, ctx = T, preview = false) {
-  return `<div class="screen">${topBar({ title: '주문하기', back: false, preview })}${warningSlot(ctx, preview)}
+  return `<div class="screen">${topBar({ title: '주문하기', back: false, preview })}
     <main class="content">
       <section class="card hero-center">${art('share')}
         <h2 class="dp-title" style="margin-bottom:8px">친구와 공유하고<br>5,000원 할인받기</h2>
@@ -947,7 +963,8 @@ function actBeginTask() {
   T = newTaskState(a.taskId, a.condition, idx + 1);   // 과제마다 완전히 새로운 상태
   logEvent('task_started', { attempt: session.attempts[a.taskId] });
   navStack = [];
-  go('home', {}, { push: false });
+  // 멤버십 해지(O) 과제만 MY 화면에서 시작 (메뉴 찾기 부담 제거), 나머지는 홈에서 시작
+  go(a.taskId === 'O' ? 'my' : 'home', {}, { push: false });
   if (CONDITION_SPEC[a.condition].haptic && !HAPTIC_SUPPORTED) {
     showModal({ title: '연구자 확인 필요', body: esc(HAPTIC_UNSUPPORTED_MESSAGE), actions: [{ label: '확인', primary: true }] });
   }
@@ -1157,7 +1174,7 @@ function actRecogNext() {
 // 경고 테스트 (디버그 시작 화면 / 연구자 모드)
 function actTestWarning({ cond }) {
   ensureAudio();
-  showModal({ title: `경고 테스트: ${cond}`, body: '<div class="warning-slot" id="warningSlot"></div><p id="testResult"></p>', actions: [{ label: '닫기', primary: true }] });
+  showModal({ title: `경고 테스트: ${cond}`, body: '<p id="testResult"></p>', actions: [{ label: '닫기', primary: true }] });
   const r = triggerWarning(cond);
   testHapticId = r.hapticRequestId || null;
   document.getElementById('testResult').textContent =
@@ -1195,6 +1212,7 @@ function setupBackTrap() {
   window.addEventListener('popstate', () => {
     history.pushState({ moa: 'trap' }, '');
     if (modalRoot.innerHTML) { closeModal(); return; }
+    if (warningRoot.innerHTML) { closeWarningPopup(); return; }
     if (T) logEvent('hardware_back', { from: view.name });
     if (canGoBack()) goBack();
   });
@@ -1431,6 +1449,7 @@ const ACTIONS = {
   unavailable: d => { showToast('현재 이용할 수 없는 메뉴입니다.'); logEvent('unavailable_menu', { label: d.label }); },
   rCsv, rShareCsv, rJson, rDeleteOne, rWipe, rRefresh: () => renderResearcher(),
   logoTap: actLogoTap,
+  closeWarning: () => closeWarningPopup(),
 };
 
 document.addEventListener('click', e => {

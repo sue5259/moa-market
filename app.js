@@ -87,7 +87,7 @@ const DECISION_SCREEN = { N: 'nagSecond', O: 'retention', S: 'checkout', I: 'plu
 // 선택값 → 저항(1) / 순응(0)
 const CHOICE_RESISTANCE = {
   N: { view_discount: 0, continue_shopping: 1 },
-  O: { keep_benefits: 0, cancel_anyway: 1 },     // O는 최종 해지 완료까지 해야 1
+  O: { keep_benefits: 0, cancel_anyway: 1 },     // O도 의사결정 화면 선택 기준 (최종 해지 여부는 finalCancellationCompleted)
   S: { pay_with_option: 0, pay_without_option: 1 },
   I: { start_plus_trial: 0, continue_regular: 1 },
   F: { share_for_discount: 0, buy_without_discount: 1 },
@@ -350,8 +350,23 @@ function showWarningPopup() {
   warningRoot.innerHTML = WARNING_POPUP_HTML;
   return true;
 }
-// X 버튼: 팝업만 닫음 (실험 응답으로 기록하지 않음, T0/T1 측정에 영향 없음)
+// 팝업만 닫음 (화면 이동 등 내부 동작용 — 닫은 시각은 기록하지 않음)
 function closeWarningPopup() { warningRoot.innerHTML = ''; }
+
+// 참가자가 직접 팝업을 닫았을 때 (X 버튼 / Android 뒤로가기)
+// 의사결정 화면에서 처음 닫은 시각을 기록한다 → warningCloseMs = 닫은 시각 − T0
+function closeWarningByUser(via) {
+  if (!warningRoot.innerHTML) return;
+  closeWarningPopup();
+  const d = T && !T.finished ? T.decision : null;
+  if (d && d.visualShown && d.t1 == null && d.warningClosedPerf == null) {
+    const now = performance.now();
+    d.warningClosedPerf = now;
+    d.warningCloseMs = Math.round(now - d.t0);
+    logEvent('warning_closed', { via, warningCloseMs: d.warningCloseMs });
+    debugUpdate();
+  }
+}
 
 /**
  * 모든 조건을 처리하는 단일 경고 함수.
@@ -451,8 +466,10 @@ function recordDecision(choice) {
   const t1 = performance.now();
   Object.assign(T.decision, {
     t1, madeAt: iso(), choice, responseTimeMs: Math.round(t1 - T.decision.t0),
+    // 팝업을 닫은 뒤 선택까지 걸린 시간 (시각 경고 조건만, NW는 null)
+    postWarningRtMs: T.decision.warningClosedPerf != null ? Math.round(t1 - T.decision.warningClosedPerf) : null,
   });
-  logEvent('decision_made', { choice, responseTimeMs: T.decision.responseTimeMs });
+  logEvent('decision_made', { choice, responseTimeMs: T.decision.responseTimeMs, postWarningRtMs: T.decision.postWarningRtMs ?? undefined });
   if (DEBUG) console.info('[MOA] T1', choice, t1.toFixed(1), 'RT', T.decision.responseTimeMs, 'ms');
   debugUpdate();
   return true;
@@ -496,7 +513,12 @@ function finishTask(outcome) {
     resistance: outcome.resistance,
     responseTimeMs: d.responseTimeMs ?? '',
     responseTimeSec: d.responseTimeMs != null ? Math.round(d.responseTimeMs) / 1000 : '',
+    warningCloseMs: d.warningCloseMs ?? '',            // 경고 확인 시간 = 팝업 닫은 시각 − T0 (NW는 빈칸)
+    postWarningRtMs: d.postWarningRtMs ?? '',          // 닫은 뒤 선택 시간 = T1 − 팝업 닫은 시각 (NW는 빈칸)
     taskSuccess: outcome.taskSuccess,
+    taskViewCount: T.events.filter(e => e.type === 'instruction_reopened').length,   // 과제 전체에서 '과제 보기' 연 횟수
+    taskViewAtDecision: d.instructionViews || 0,       // 의사결정 화면(T0~T1)에서 '과제 보기' 연 횟수
+    abortedByResearcher: 0,
     visualShown: d.visualShown ? 1 : 0,
     audioTriggered: d.audioTriggered ? 1 : 0,
     audioPreset: d.audioPreset || '',
@@ -1007,9 +1029,41 @@ function actAfterTask() {
 function actOpenInstruction() {
   if (!T) return;
   logEvent('instruction_reopened');
+  if (T.decision && T.decision.t1 == null) T.decision.instructionViews = (T.decision.instructionViews || 0) + 1;
   const t = TASK_TEXT[T.taskId];
-  showModal({ title: '지금 할 일', body: `<p style="font-size:20px;font-weight:700;color:var(--text)">${t.instruction}</p>${t.note ? `<p style="margin-top:8px">${t.note}</p>` : ''}`,
+  // 제목 '지금 할 일'을 3초 안에 5번 누르면 연구자용 과제 중단 확인창이 열림 (참가자에게는 보이지 않는 기능)
+  showModal({ title: '<span data-act="abortTap">지금 할 일</span>', body: `<p style="font-size:20px;font-weight:700;color:var(--text)">${t.instruction}</p>${t.note ? `<p style="margin-top:8px">${t.note}</p>` : ''}`,
     actions: [{ label: '닫기', primary: true }] });
+}
+
+// ── 연구자용 과제 중단 ──
+// 참가자가 의사결정 화면에 도달하지 못하고 막힌 경우(예: O에서 해지 메뉴를 끝내 못 찾음) 사용.
+// 저항·반응시간은 결측(빈칸), status = 'aborted' 로 기록하고 다음 과제로 넘어간다.
+let abortTaps = [];
+function actAbortTap() {
+  if (!T || T.finished) return;
+  const now = performance.now();
+  abortTaps = abortTaps.filter(t => now - t < 3000);
+  abortTaps.push(now);
+  if (abortTaps.length < 5) return;
+  abortTaps = [];
+  closeModal();
+  showModal({
+    title: '연구자 확인: 과제 중단',
+    body: '이 과제를 중단하고 다음 과제로 넘어갈까요?<br>저항 행동과 반응시간은 빈칸(결측)으로 기록됩니다.',
+    actions: [{ label: '취소', primary: true }, { label: '과제 중단', onClick: abortTaskByResearcher }],
+  });
+}
+function abortTaskByResearcher() {
+  if (!T || T.finished) return;
+  const d = T.decision;
+  logEvent('task_aborted_by_researcher', { decisionReached: !!d, choiceMade: !!(d && d.choice) });
+  finishTask({
+    resistance: d && d.choice ? CHOICE_RESISTANCE[T.taskId][d.choice] ?? '' : '',
+    taskSuccess: 0,
+    extra: { abortedByResearcher: 1, finalChoice: 'aborted' },
+  });
+  endTaskView();
 }
 
 // 쇼핑 동작
@@ -1100,12 +1154,15 @@ function actRetentionChoice({ c }) {
 function actFinalCancel({ c }) {
   if (!T || T.finished) return;
   logEvent('final_cancel_step', { choice: c });
+  // 저항은 의사결정 화면(경고가 나온 화면)의 선택으로 판정: '그래도 해지하기' = 1
+  // 최종 화면 결과는 finalCancellationCompleted / taskSuccess 에 따로 기록
+  const resistance = CHOICE_RESISTANCE.O[T.decision && T.decision.choice] ?? '';
   if (c === 'complete') {
     T.member = false;
-    finishTask({ resistance: 1, taskSuccess: 1, extra: { finalCancellationCompleted: 1, finalChoice: 'cancel_completed' } });
+    finishTask({ resistance, taskSuccess: 1, extra: { finalCancellationCompleted: 1, finalChoice: 'cancel_completed' } });
     go('cancelDone', {}, { push: false });
   } else {
-    finishTask({ resistance: 0, taskSuccess: 0, extra: { finalCancellationCompleted: 0, finalChoice: 'keep_membership' } });
+    finishTask({ resistance, taskSuccess: 0, extra: { finalCancellationCompleted: 0, finalChoice: 'keep_membership' } });
     go('keepDone', {}, { push: false });
   }
 }
@@ -1251,7 +1308,7 @@ function setupBackTrap() {
   window.addEventListener('popstate', () => {
     history.pushState({ moa: 'trap' }, '');
     if (modalRoot.innerHTML) { closeModal(); return; }
-    if (warningRoot.innerHTML) { closeWarningPopup(); return; }
+    if (warningRoot.innerHTML) { closeWarningByUser('hardware_back'); return; }
     if (T) logEvent('hardware_back', { from: view.name });
     if (canGoBack()) goBack();
   });
@@ -1280,6 +1337,7 @@ function debugUpdate() {
     <div>Condition <b>${T ? `${T.condition} (${CONDITION_SPEC[T.condition].label})` : '-'}</b></div>
     <div>AudioContext <b>${audioCtx ? audioCtx.state : '미생성'}</b> · 진동 <b>${HAPTIC_METHOD_LABEL}</b></div>
     <div>T0 <b>${f(d && d.t0)}</b> · T1 <b>${f(d && d.t1)}</b></div>
+    <div>경고 닫음 <b>${d && d.warningCloseMs != null ? d.warningCloseMs + ' ms' : '-'}</b> · 닫은 뒤 선택 <b>${d && d.postWarningRtMs != null ? d.postWarningRtMs + ' ms' : '-'}</b></div>
     <div>RT <b>${d && d.responseTimeMs != null ? `${d.responseTimeMs} ms (${(d.responseTimeMs / 1000).toFixed(2)} s)` : '-'}</b></div>
     <div>경고 실행 ${d ? `V:<b>${d.visualShown ? 1 : 0}</b> A:<b>${d.audioTriggered ? 1 : 0}</b>(${d.audioState}) H:<b>${d.hapticTriggered ? 1 : 0}</b>${d.hapticError ? ' ' + d.hapticError : ''}` : '-'}</div>
     ${T && T.taskId === 'S' ? `<div>안심배송 ${T.addon ? 'ON' : 'OFF'} · 조작 ${T.addonToggleCount}회</div>` : ''}
@@ -1293,7 +1351,8 @@ function debugUpdate() {
 /* ─── 19. 연구자 모드 (?researcher=1) ──────────────────────────── */
 const CSV_COLUMNS = [
   'participantId', 'sessionMode', 'status', 'taskOrder', 'taskId', 'taskType', 'condition',
-  'choice', 'resistance', 'responseTimeMs', 'responseTimeSec', 'taskSuccess',
+  'choice', 'resistance', 'responseTimeMs', 'responseTimeSec', 'warningCloseMs', 'postWarningRtMs', 'taskSuccess',
+  'taskViewCount', 'taskViewAtDecision', 'abortedByResearcher',
   'visualShown', 'audioTriggered', 'audioPreset', 'audioContextState', 'hapticSupported', 'hapticMethod', 'hapticTriggered', 'hapticAckLatencyMs', 'hapticError',
   'optionChanged', 'optionChangeTime', 'optionToggleCount', 'finalOptionSelected', 'paidAmount',
   'finalCancellationCompleted', 'finalChoice', 'budsSelected', 'nagFirstChoice', 'orderItems',
@@ -1315,7 +1374,7 @@ function buildExportRows() {
         taskType: TASK_TYPES[a.taskId], condition: a.condition,
         userAgent: p.device && p.device.userAgent, screenWidth: p.device && p.device.screenWidth, screenHeight: p.device && p.device.screenHeight,
       };
-      row.status = r ? 'completed' : 'not_completed';
+      row.status = r ? (r.abortedByResearcher ? 'aborted' : 'completed') : 'not_completed';
       row.recognitionYesNo = rec.recognitionYesNo ?? '';
       row.recognitionText = rec.recognitionText ?? '';
       row.attempts = p.attempts[a.taskId] || 0;
@@ -2175,7 +2234,8 @@ const ACTIONS = {
   unavailable: d => { showToast('현재 이용할 수 없는 메뉴입니다.'); logEvent('unavailable_menu', { label: d.label }); },
   rCsv, rShareCsv, rJson, rDeleteOne, rWipe, rRefresh: () => renderResearcher(),
   logoTap: actLogoTap,
-  closeWarning: () => closeWarningPopup(),
+  closeWarning: () => closeWarningByUser('x_button'),
+  abortTap: actAbortTap,
   ...SURVEY_ACTIONS,
 };
 

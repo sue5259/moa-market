@@ -30,6 +30,12 @@
 - 연구자 모드: 사전설문·사후설문·인터뷰 기록 CSV, 질문별 녹음 재생·공유(다운로드). 참가자 삭제/전체 삭제 시 녹음 파일도 삭제
 - JSON 백업에는 음성 파일이 들어가지 않음 → 녹음은 연구자 모드에서 질문별로 공유해 따로 보관
 
+## 추가 기록 (과제 CSV)
+- `warningCloseMs` = 경고 팝업을 닫은 시각 − T0, `postWarningRtMs` = T1 − 팝업 닫은 시각 (시각 경고 조건만, NW는 빈칸). responseTimeMs ≈ 두 값의 합
+- `taskViewCount` = 과제 중 '과제 보기' 연 횟수, `taskViewAtDecision` = 의사결정 화면(T0~T1)에서 연 횟수
+- 멤버십 해지(O) 저항 = 의사결정 화면에서 '그래도 해지하기'를 고르면 1 (최종 화면에서 유지해도 1). 최종 해지 여부는 `finalCancellationCompleted`
+- 연구자용 과제 중단: '과제 보기' 창 제목('지금 할 일')을 3초 안에 5번 → 확인 → 저항·반응시간 빈칸, `status=aborted`, `abortedByResearcher=1`
+
 ## 진동 방식 (자동 선택)
 | 기기 | 방식 | 비고 |
 |---|---|---|
@@ -58,5 +64,5 @@ participantId, taskOrder, taskId, taskType, condition, choice, resistance, respo
 visualShown, audioTriggered, audioPreset, hapticSupported, hapticMethod, hapticTriggered, hapticAckLatencyMs, optionChanged, optionChangeTime(T0 기준 ms),
 finalCancellationCompleted, recognitionYesNo, recognitionText, attempts, t0Ms, t1Ms, timestamp, userAgent, screenWidth, screenHeight, events(JSON)
 
-taskSuccess 정의: N=Daily Tumbler로 구매 준비 도달, O=최종 해지 완료, S=29,000원 이내 결제, I·F=구매 완료.
+taskSuccess 정의: N=데일리 텀블러로 구매 준비 도달, O=최종 해지 완료, S=29,000원 이내 결제, I·F=구매 완료.
 같은 ID로 재시작하면 미완료 과제부터 이어서 진행되며 `attempts` 열에 재시도 횟수가 남습니다.

@@ -448,3 +448,14 @@ body.is-researcher #app { max-width: 1200px; background: #F6F7F9; }
 .mic-code { margin: -4px 0 12px; text-align: center; font-size: 16px; color: var(--muted); }
 
 .q-help { margin-top: 4px; font-size: 17px; color: var(--sub); }
+
+/* ---------- 실험 안내 · 연습 · 인지 확인 음성 답변 (추가) ---------- */
+.study-steps { margin: 10px 0 0; padding-left: 26px; list-style: decimal; }
+.study-steps li { padding: 4px 0; font-size: 18px; color: var(--text); }
+.study-note { color: var(--sub); font-size: 17px; }
+.study-time { margin-top: 16px; padding: 14px 16px; border-radius: 12px; background: var(--brand-soft); font-size: 19px; }
+.notice-card { border-top-color: #2F6FDB; }
+.notice-title { color: #16191D; }
+.recog-audio { margin-top: 4px; padding: 16px; border: 1px solid #E4E7EB; border-radius: 14px; background: #fff; }
+.recog-hint { color: var(--sub); }
+.recog-audio .btn-row .btn { min-height: 56px; }

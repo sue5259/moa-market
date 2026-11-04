@@ -358,6 +358,10 @@ function closeWarningPopup() { warningRoot.innerHTML = ''; }
 function closeWarningByUser(via) {
   if (!warningRoot.innerHTML) return;
   closeWarningPopup();
+  if (T && T.practice && T.noticeShownPerf != null && T.noticeCloseMs == null) {   // 연습 안내 창
+    T.noticeCloseMs = Math.round(performance.now() - T.noticeShownPerf);
+    logEvent('practice_notice_closed', { via, noticeCloseMs: T.noticeCloseMs });
+  }
   const d = T && !T.finished ? T.decision : null;
   if (d && d.visualShown && d.t1 == null && d.warningClosedPerf == null) {
     const now = performance.now();
@@ -450,6 +454,7 @@ function render(opts = {}) {
 // 의사결정 화면이 DOM에 들어간 바로 그 순간: T0 기록 + 경고 실행 (모든 조건 동일 기준)
 function afterRender() {
   if (T && !T.finished && view.name === DECISION_SCREEN[T.taskId] && !T.decision) beginDecision();
+  if (T && T.practice && view.name === 'checkout' && T.noticeShownPerf == null) showPracticeNotice();
 }
 function beginDecision() {
   const t0 = performance.now();
@@ -666,7 +671,7 @@ function screenRecogIntro() {
   return `<main class="screen center-screen"><div class="intro-card">
     <p class="step-label">다음 단계</p>
     <h2 class="done-title" style="text-align:left;margin-top:8px">앞에서 보았던 화면을 다시 보여드립니다</h2>
-    <p class="intro-sub" style="margin:12px 0 24px">화면을 하나씩 보면서 질문에 답해 주세요. 정답은 없습니다. 느낀 그대로 답해 주시면 됩니다.</p>
+    <p class="intro-sub" style="margin:12px 0 24px">화면을 하나씩 보면서 질문에 답해 주세요. 정답은 없습니다. 느낀 그대로 답해 주시면 됩니다.<br>‘있었다’를 고르시면 어떤 부분이 그렇게 느껴졌는지 말로 답해 주세요. 답변은 녹음됩니다.</p>
     <button class="btn btn-primary btn-xl" data-act="startRecognition">시작하기</button>
   </div></main>`;
 }
@@ -684,10 +689,7 @@ function screenRecog() {
         <button class="btn choice ${yes === true ? 'is-selected' : ''}" data-act="recogAnswer" data-v="1" aria-pressed="${yes === true}">있었다</button>
         <button class="btn choice ${yes === false ? 'is-selected' : ''}" data-act="recogAnswer" data-v="0" aria-pressed="${yes === false}">없었다</button>
       </div>
-      <div id="recogTextWrap" class="${yes === true ? '' : 'hidden'}">
-        <label class="q-sub" for="recogText">어떤 부분이 그렇게 느껴졌나요?</label>
-        <textarea id="recogText" rows="4" placeholder="자유롭게 적어 주세요">${esc(recogDraft.text)}</textarea>
-      </div>
+      ${yes === true ? recogAudioPanel() : ''}
       <p class="form-error" id="recogError" role="alert"></p>
       <button class="btn btn-primary btn-xl" data-act="recogNext">다음</button>
     </section>
@@ -1001,7 +1003,8 @@ function enterSession(p, resumed) {
   maybeFullscreen();
   // 공통 안내는 첫 과제를 아직 시작하지 않았을 때 한 번만
   normalizeParticipant(p);
-  if (p.phase === 'preSurvey') go(p.progress.preSurveyPage ? 'preSurvey' : 'preSurveyIntro', {}, { push: false });
+  if (p.phase === 'preSurvey') go(!p.progress.introDone ? 'studyIntro' : p.progress.preSurveyPage ? 'preSurvey' : 'preSurveyIntro', {}, { push: false });
+  else if (p.phase === 'practice') { T = null; go('practiceIntro', {}, { push: false }); }
   else if (p.phase === 'tasks') go(p.currentIndex === 0 && !Object.keys(p.attempts).length ? 'commonIntro' : 'taskIntro', {}, { push: false });
   else if (p.phase === 'recognition') { recogDraft = { yes: null, text: '' }; go(p.recogIndex === 0 ? 'recogIntro' : 'recog', {}, { push: false }); }
   else if (p.phase === 'postSurvey') go(p.progress.postSurveyIndex || Object.keys(p.postSurvey).length ? 'postSurvey' : 'postSurveyIntro', {}, { push: false });
@@ -1048,6 +1051,7 @@ function actAbortTap() {
   if (abortTaps.length < 5) return;
   abortTaps = [];
   closeModal();
+  if (T.practice) { confirmSkipPractice(); return; }
   showModal({
     title: '연구자 확인: 과제 중단',
     body: '이 과제를 중단하고 다음 과제로 넘어갈까요?<br>저항 행동과 반응시간은 빈칸(결측)으로 기록됩니다.',
@@ -1188,6 +1192,7 @@ function actToggleAddon() {
 // 결제 (S의 최종 선택 / I·F의 과제 완료)
 function actPay() {
   if (!T || T.finished) return;
+  if (T.practice) { finishPractice(); return; }
   const s = orderSummary(T);
   if (T.taskId === 'S') {
     if (!recordDecision(T.addon ? 'pay_with_option' : 'pay_without_option')) return;
@@ -1234,26 +1239,33 @@ function actShareChoice({ c }) {
 
 // 다크패턴 인지 확인
 function actRecogAnswer({ v }) {
+  if (rec.status !== 'idle') return;
   recogDraft.yes = v === '1';
-  document.querySelectorAll('[data-act="recogAnswer"]').forEach(b => {
-    const sel = (b.dataset.v === '1') === recogDraft.yes;
-    b.classList.toggle('is-selected', sel);
-    b.setAttribute('aria-pressed', String(sel));
-  });
-  document.getElementById('recogTextWrap').classList.toggle('hidden', !recogDraft.yes);
-  document.getElementById('recogError').textContent = '';
+  render({ keepScroll: true });                 // '있었다'면 음성 답변 영역 표시
 }
 function actRecogNext() {
   if (recogDraft.yes === null) {
     document.getElementById('recogError').textContent = '‘있었다’ 또는 ‘없었다’를 선택해 주세요.';
     return;
   }
+  if (rec.status !== 'idle') return;
   const a = session.assignment[session.recogIndex];
+  const am = recogDraft.yes ? (session.recognitionAudio[a.taskId] || {}) : {};
+  if (recogDraft.yes && !am.recorded && !am.skipped && !recogDraft.text.trim()) {
+    document.getElementById('recogError').textContent = '녹음하시거나 ‘답변하지 않기’를 눌러 주세요.';
+    return;
+  }
   session.recognition[a.taskId] = {
     recognitionYesNo: recogDraft.yes ? 1 : 0,
-    recognitionText: recogDraft.yes ? recogDraft.text.trim() : '',
+    recognitionText: recogDraft.yes ? recogDraft.text.trim() : '',          // 마이크를 못 쓸 때만 글로 입력
+    recognitionRecorded: am.recorded ? 1 : 0,
+    recognitionAudioSkipped: am.skipped ? 1 : 0,
+    recognitionDurationMs: am.recorded ? am.durationMs : '',
+    recognitionAudioKey: am.recorded ? am.audioKey : '',
+    recognitionStorageType: am.recorded ? am.storageType : '',
     recognitionAnsweredAt: iso(),
   };
+  rec = { status: 'idle', qid: null, error: '', micFailed: rec.micFailed };
   session.recogIndex++;
   session.updatedAt = iso();
   recogDraft = { yes: null, text: '' };
@@ -1356,7 +1368,7 @@ const CSV_COLUMNS = [
   'visualShown', 'audioTriggered', 'audioPreset', 'audioContextState', 'hapticSupported', 'hapticMethod', 'hapticTriggered', 'hapticAckLatencyMs', 'hapticError',
   'optionChanged', 'optionChangeTime', 'optionToggleCount', 'finalOptionSelected', 'paidAmount',
   'finalCancellationCompleted', 'finalChoice', 'budsSelected', 'nagFirstChoice', 'orderItems',
-  'recognitionYesNo', 'recognitionText', 'attempts',
+  'recognitionYesNo', 'recognitionText', 'recognitionRecorded', 'recognitionDurationMs', 'recognitionAudioKey', 'attempts',
   't0Ms', 't1Ms', 'decisionShownAt', 'decisionMadeAt', 'taskStartedAt', 'timestamp',
   'userAgent', 'screenWidth', 'screenHeight', 'events',
 ];
@@ -1377,6 +1389,9 @@ function buildExportRows() {
       row.status = r ? (r.abortedByResearcher ? 'aborted' : 'completed') : 'not_completed';
       row.recognitionYesNo = rec.recognitionYesNo ?? '';
       row.recognitionText = rec.recognitionText ?? '';
+      row.recognitionRecorded = rec.recognitionRecorded ?? '';
+      row.recognitionDurationMs = rec.recognitionDurationMs ?? '';
+      row.recognitionAudioKey = rec.recognitionAudioKey ?? '';
       row.attempts = p.attempts[a.taskId] || 0;
       out.push(row);
     });
@@ -1593,7 +1608,7 @@ const PHASE_LABEL = { preSurvey: '사전설문', tasks: '과제', recognition: '
 // 기존 참가자 데이터에 새 필드가 없으면 자동 보완 (하위 호환)
 function normalizeParticipant(p) {
   if (!p || typeof p !== 'object') return p;
-  for (const k of ['results', 'recognition', 'attempts', 'preSurvey', 'postSurvey', 'interview', 'progress']) {
+  for (const k of ['results', 'recognition', 'attempts', 'preSurvey', 'postSurvey', 'interview', 'progress', 'practice', 'recognitionAudio']) {
     if (!p[k] || typeof p[k] !== 'object' || Array.isArray(p[k])) p[k] = {};
   }
   if (!Array.isArray(p.sessionEvents)) p.sessionEvents = [];
@@ -1670,9 +1685,9 @@ function actPreSurveyNext() {
     return;
   }
   session.preSurvey.completedAt = iso();
-  session.phase = 'tasks';
+  session.phase = 'practice';
   saveStore();
-  go('commonIntro', {}, { push: false });              // 기존 공통 안내 → 과제 1
+  go('practiceIntro', {}, { push: false });            // 연습 → (연습 후) 기존 공통 안내 → 과제 1
 }
 
 /* 사후설문 화면 */
@@ -1872,14 +1887,23 @@ function setRecError(text) {
 
 async function actRecordStart() {
   if (rec.status !== 'idle') return;
-  const qid = INTERVIEW_IDS[session.progress.interviewIndex || 0];
+  const tgt = recTarget();                      // 인터뷰 질문 또는 인지 확인 화면
+  const qid = tgt.qid;
   stopPlayback();
   rec = { status: 'starting', qid, error: '' };
   render({ keepScroll: true });
+  if (micPermission !== 'granted') {
+    const ok = await requestMicPermission();
+    if (!ok) {
+      rec = { status: 'idle', qid: null, micFailed: true, error: MIC_UNAVAILABLE_MESSAGE + (micErrorCode ? ` (원인 코드: ${micErrorCode})` : '') };
+      render({ keepScroll: true });
+      return;
+    }
+  }
   if (NATIVE_APP) {
     const r = await nativeAudioRequest({ type: 'interviewRecordStart', participantId: session.participantId, questionId: qid });
     if (!r.ok) { rec = { status: 'idle', qid: null, error: '녹음을 시작할 수 없습니다. 연구자에게 알려 주세요.' }; render({ keepScroll: true }); return; }
-    rec = { status: 'recording', qid, startedPerf: performance.now(), native: true };
+    rec = { status: 'recording', qid, startedPerf: performance.now(), native: true, save: tgt.save };
   } else {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1888,9 +1912,9 @@ async function actRecordStart() {
       const chunks = [];
       mr.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
       mr.start(1000);
-      rec = { status: 'recording', qid, startedPerf: performance.now(), mr, chunks, stream, mime: mr.mimeType || mime };
+      rec = { status: 'recording', qid, startedPerf: performance.now(), mr, chunks, stream, mime: mr.mimeType || mime, save: tgt.save };
     } catch (e) {
-      rec = { status: 'idle', qid: null, error: MIC_UNAVAILABLE_MESSAGE };
+      rec = { status: 'idle', qid: null, micFailed: true, error: MIC_UNAVAILABLE_MESSAGE };
       render({ keepScroll: true });
       return;
     }
@@ -1927,7 +1951,7 @@ async function actRecordStop() {
     } catch (e) { console.error('[MOA] 녹음 저장 실패', e); }
   }
   if (meta) {
-    session.interview[cur.qid] = meta;          // 다시 녹음하면 같은 키로 교체됨
+    cur.save(meta);                             // 다시 녹음하면 같은 키로 교체됨
     session.updatedAt = iso();
     saveStore();
     rec = { status: 'idle', qid: null, error: '' };
@@ -1941,7 +1965,7 @@ function stopPlayback() {
   if (playingAudio) { try { playingAudio.pause(); URL.revokeObjectURL(playingAudio.src); } catch (e) { /* noop */ } playingAudio = null; }
 }
 async function playRecording(pid, qid) {
-  const meta = (store.participants[pid] && store.participants[pid].interview[qid]) || {};
+  const meta = audioMetaOf(store.participants[pid], qid);
   if (!meta.recorded) return false;
   stopPlayback();
   if (meta.storageType === 'native') {
@@ -2111,13 +2135,13 @@ function debugSurveyHTML() {
 }
 
 /* 연구자 모드: 설문·인터뷰 표시와 CSV */
-const PRE_CSV_COLUMNS = ['participantId', ...PRE_SURVEY_KEYS, 'completedAt'];
+const PRE_CSV_COLUMNS = ['participantId', ...PRE_SURVEY_KEYS, 'completedAt', 'introViewMs', 'practiceRuns', 'practiceFirstDurationMs', 'practiceLastDurationMs', 'practiceNoticeCloseMs', 'practiceTaskViews', 'practiceSkipped'];
 const POST_CSV_COLUMNS = ['participantId', ...POST_CONDITIONS.flatMap(c => POST_ITEMS.map(([k]) => `${c}_${k}`)), 'preferredCondition', 'completedAt'];
 const INTERVIEW_CSV_COLUMNS = ['participantId', 'questionId', 'recorded', 'skipped', 'durationMs', 'mimeType', 'storageType', 'audioKey', 'recordedAt'];
 const csvOf = (cols, rows) => '﻿' + [cols.join(','), ...rows.map(r => cols.map(c => csvCell(r[c])).join(','))].join('\r\n');
 function rPreCsv() {
   const rows = sortedParticipants().filter(p => Object.keys(p.preSurvey).length)
-    .map(p => ({ participantId: p.participantId, ...p.preSurvey }));
+    .map(p => ({ participantId: p.participantId, ...p.preSurvey, ...practiceCsvFields(p) }));
   if (!rows.length) { alert('사전설문 데이터가 없습니다.'); return; }
   download(`moa_presurvey_${stamp()}.csv`, csvOf(PRE_CSV_COLUMNS, rows), 'text/csv;charset=utf-8');
 }
@@ -2132,9 +2156,10 @@ function rPostCsv() {
 }
 function rInterviewCsv() {
   const rows = [];
-  sortedParticipants().filter(p => Object.keys(p.interview).length).forEach(p => {
-    INTERVIEW_IDS.forEach(q => {
-      const m = p.interview[q] || {};
+  sortedParticipants().filter(p => Object.keys(p.interview).length || Object.keys(p.recognitionAudio || {}).length).forEach(p => {
+    const recogIds = p.assignment.map(a => 'Recog' + a.taskId).filter(q => audioMetaOf(p, q).recorded || audioMetaOf(p, q).skipped);
+    [...recogIds, ...INTERVIEW_IDS].forEach(q => {
+      const m = audioMetaOf(p, q);
       rows.push({ participantId: p.participantId, questionId: q, recorded: m.recorded ? 1 : 0, skipped: m.skipped ? 1 : 0,
         durationMs: m.durationMs ?? '', mimeType: m.mimeType || '', storageType: m.storageType || '', audioKey: m.audioKey || '', recordedAt: m.recordedAt || '' });
     });
@@ -2161,21 +2186,24 @@ function participantSurveyHTML(p) {
     ? `<div class="table-wrap"><table class="r-table"><thead><tr><th>경고</th>${POST_ITEMS.map(([k]) => `<th>${k}</th>`).join('')}</tr></thead><tbody>
        ${POST_CONDITIONS.map(c => `<tr><td>${c}</td>${POST_ITEMS.map(([k]) => `<td>${(post[c] || {})[k] ?? '-'}</td>`).join('')}</tr>`).join('')}
        </tbody></table></div><p class="r-meta">가장 선호: <b>${post.preferredCondition || '-'}</b></p>` : '<p class="r-meta">응답 없음</p>';
-  const ivRows = INTERVIEW_IDS.map((q, i) => {
-    const m = p.interview[q] || {};
+  const recogQs = p.assignment.map(a => 'Recog' + a.taskId).filter(q => audioMetaOf(p, q).recorded);
+  const ivRows = [...recogQs, ...INTERVIEW_IDS].map((q, i) => {
+    const m = audioMetaOf(p, q);
     const state = m.recorded ? `녹음 완료 ${fmtDuration(m.durationMs)}` : m.skipped ? '답변 안 함' : '-';
     const actions = m.recorded ? `<button class="btn-small" data-act="rPlayAudio" data-id="${p.participantId}" data-q="${q}">재생</button>
       <button class="btn-small" data-act="rSaveAudio" data-id="${p.participantId}" data-q="${q}">${NATIVE_APP ? '공유' : '다운로드'}</button>` : '';
-    return `<tr><td>Q${i + 1}</td><td>${state}</td><td>${m.storageType || ''}</td><td class="r-iv-actions">${actions}</td></tr>`;
+    const label = q.startsWith('Recog') ? `인지확인 ${q.slice(5)}` : `Q${INTERVIEW_IDS.indexOf(q) + 1}`;
+    return `<tr><td>${label}</td><td>${state}</td><td>${m.storageType || ''}</td><td class="r-iv-actions">${actions}</td></tr>`;
   }).join('');
   return `<div class="r-sub"><h3>사전설문</h3>${preHTML}</div>
     <div class="r-sub"><h3>사후설문</h3>${postHTML}</div>
-    <div class="r-sub"><h3>인터뷰</h3>${Object.keys(p.interview).length
+    <div class="r-sub"><h3>안내·연습</h3>${practiceSummaryHTML(p)}</div>
+    <div class="r-sub"><h3>인터뷰 · 인지 확인 녹음</h3>${Object.keys(p.interview).length || recogQs.length
       ? `<div class="table-wrap"><table class="r-table"><thead><tr><th>질문</th><th>상태</th><th>저장</th><th></th></tr></thead><tbody>${ivRows}</tbody></table></div>` : '<p class="r-meta">응답 없음</p>'}</div>`;
 }
 async function rPlayAudio({ id, q }) { await playRecording(id, q); }
 async function rSaveAudio({ id, q }) {
-  const m = (store.participants[id] && store.participants[id].interview[q]) || {};
+  const m = audioMetaOf(store.participants[id], q);
   if (!m.recorded) return;
   if (m.storageType === 'native') {
     if (!NATIVE_APP) { alert('이 녹음은 iPhone 실험 앱 안에 저장되어 있습니다. 앱의 연구자 모드에서 공유해 주세요.'); return; }
@@ -2208,10 +2236,221 @@ const SURVEY_ACTIONS = {
   postReplay: d => { ensureAudio(); triggerWarning(d.cond); },
   surveyPick: actSurveyPick,
   interviewStart: actInterviewStart, recordStart: actRecordStart, recordStop: actRecordStop,
-  recordPlay: () => playRecording(session.participantId, INTERVIEW_IDS[session.progress.interviewIndex || 0]),
+  recordPlay: () => playRecording(session.participantId, recTarget().qid),
   interviewSkip: actInterviewSkip, interviewNext: actInterviewNext,
   dbgGoPre, dbgFillPre, dbgGoPost, dbgFillPost, dbgGoInterview,
   rPreCsv, rPostCsv, rInterviewCsv, rPlayAudio, rSaveAudio,
+};
+
+/* ─── 19-B. 실험 안내 · 연습 과제 · 인지 확인 음성 답변 ─────────────── */
+const STUDY_DURATION_TEXT = '약 40분';                     // 실험 안내에 표시되는 전체 소요 시간
+const PRACTICE_NOTICE = { title: '배송 안내', body: '오늘 주문하면 내일 도착합니다.' };
+TASK_TEXT.PR = { instruction: '모눈 노트 1개를 구매하려고 하는 상황입니다. 구매를 진행해 주세요.' };
+TASK_PRODUCT.PR = 'notebook';                               // 연습에서만 구매 가능
+PHASE_LABEL.practice = '연습';
+
+/* 실험 안내 (참가 번호 입력 직후, 사전설문 전) */
+function screenStudyIntro() {
+  return `<main class="screen survey"><div class="intro-card">
+    <p class="step-label">실험 안내</p>
+    <h2 class="done-title" style="text-align:left;margin-top:8px">실험 안내</h2>
+    <p class="intro-sub" style="margin-top:12px">이 실험은 스마트폰 쇼핑 앱을 사용하는 경험을 알아보기 위한 연구입니다.</p>
+    <p class="intro-sub" style="margin-top:16px">실험은 다음 순서로 진행됩니다.</p>
+    <ol class="study-steps">
+      <li>스마트폰 사용 경험에 관한 간단한 설문</li>
+      <li>앱 사용 연습</li>
+      <li>쇼핑 앱에서 짧은 과제 5개 수행</li>
+      <li>과제에 대한 질문과 설문 <span class="study-note">(일부 답변은 음성으로 녹음됩니다)</span></li>
+      <li>짧은 인터뷰 <span class="study-note">(답변은 음성으로 녹음됩니다)</span></li>
+    </ol>
+    <p class="study-time">전체 시간은 <b>${STUDY_DURATION_TEXT}</b>입니다.</p>
+    <p class="intro-sub" style="margin-top:12px">실험에 쓰이는 앱은 연구용으로 만든 가상의 앱입니다. 실제 결제나 가입은 이루어지지 않습니다.</p>
+    <p class="intro-sub" style="margin-top:8px">이름 등 개인정보는 기록하지 않으며, 응답은 연구 목적으로만 사용됩니다.</p>
+    <p class="intro-sub" style="margin:8px 0 24px">진행 중 불편하시면 언제든지 연구자에게 말씀해 주세요.</p>
+    <button class="btn btn-primary btn-xl" data-act="studyIntroNext">다음</button>
+  </div></main>`;
+}
+function actStudyIntroNext() {
+  session.progress.introDone = true;
+  session.progress.introViewMs = Math.round(performance.now() - lastRenderAt);   // 안내 화면을 본 시간
+  session.updatedAt = iso();
+  saveStore();
+  go(session.progress.preSurveyPage ? 'preSurvey' : 'preSurveyIntro', {}, { push: false });
+}
+
+/* 연습 과제 (실험 결과에 포함되지 않음, 경고·소리·진동 없음) */
+function screenPracticeIntro() {
+  const again = (session.practice.runs || []).length > 0;
+  return `<main class="screen center-screen"><div class="intro-card">
+    <p class="step-label">앱 사용 연습</p>
+    <h2 class="done-title" style="text-align:left;margin-top:8px">본 과제 전에 연습해 봅니다</h2>
+    <p class="intro-sub" style="margin-top:12px">앱 사용에 익숙해지도록 짧은 연습을 해 보겠습니다. 연습은 실험 결과에 포함되지 않습니다.</p>
+    <div class="task-box"><p class="task-box-label">연습 과제</p><p class="task-box-text">${TASK_TEXT.PR.instruction}</p></div>
+    <p class="intro-hint">과제 중에 화면 오른쪽 위 <b>과제 보기</b>를 누르면 이 내용을 다시 볼 수 있습니다.</p>
+    <button class="btn btn-primary btn-xl" data-act="practiceStart">${again ? '연습 다시 시작하기' : '연습 시작하기'}</button>
+  </div></main>`;
+}
+function actPracticeStart() {
+  ensureAudio();
+  T = newTaskState('PR', 'NW', 0);
+  T.practice = true;
+  T.runNo = (session.practice.runs || []).length + 1;
+  logEvent('practice_started', { run: T.runNo });
+  navStack = [];
+  go('home', {}, { push: false });
+}
+// 결제 화면에 처음 들어갔을 때 경고와 무관한 중립 안내 창 (X로 닫기 연습)
+function showPracticeNotice() {
+  warningRoot.innerHTML = `<div class="warn-backdrop">
+    <div class="warn-card notice-card" role="dialog" aria-modal="true" aria-labelledby="noticeTitle">
+      <button type="button" class="warn-close" data-act="closeWarning" aria-label="안내 닫기">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+      <h2 class="warn-title notice-title" id="noticeTitle">
+        <svg class="warn-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#2F6FDB"/><path d="M12 10.5v6" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="7.4" r="1.3" fill="#fff"/></svg>
+        <span>${PRACTICE_NOTICE.title}</span>
+      </h2>
+      <p class="warn-body">${PRACTICE_NOTICE.body}</p>
+    </div></div>`;
+  T.noticeShownPerf = performance.now();
+  logEvent('practice_notice_shown');
+}
+function finishPractice() {
+  const s = orderSummary(T);
+  const run = {
+    run: T.runNo, startedAt: T.startedAt, completedAt: iso(),
+    durationMs: Math.round(performance.now() - T.startPerf),
+    items: s.items.map(p => p.id).join('|'), paidAmount: s.total,
+    taskViews: T.events.filter(e => e.type === 'instruction_reopened').length,
+    noticeCloseMs: T.noticeCloseMs ?? '',
+    events: T.events,
+  };
+  session.practice.runs = [...(session.practice.runs || []), run];
+  session.practice.completedAt = iso();
+  session.updatedAt = iso();
+  T.finished = true;
+  T = null; navStack = [];
+  saveStore();
+  go('practiceDone', {}, { push: false });
+}
+function screenPracticeDone() {
+  return `<main class="screen center-screen"><div class="intro-card">
+    <div class="done-mark" aria-hidden="true">✓</div>
+    <h2 class="done-title">연습을 마쳤습니다</h2>
+    <p class="done-text">이제 본 과제를 시작합니다.<br>연습을 한 번 더 해 보고 싶으시면 아래 버튼을 눌러 주세요.</p>
+    <div class="btn-stack" style="margin-top:0">
+      <button class="btn btn-primary btn-xl" data-act="practiceFinish">본 과제 시작하기</button>
+      <button class="btn btn-secondary btn-xl" data-act="practiceStart">연습 한 번 더 하기</button>
+    </div>
+  </div></main>`;
+}
+function actPracticeFinish() {
+  session.phase = 'tasks';
+  session.updatedAt = iso();
+  saveStore();
+  go('commonIntro', {}, { push: false });        // 기존 공통 안내 → 과제 1
+}
+// 연구자용: 연습 중 '과제 보기' 제목 5번 → 연습 건너뛰기
+function confirmSkipPractice() {
+  showModal({
+    title: '연구자 확인: 연습 건너뛰기',
+    body: '연습을 끝내고 본 과제로 넘어갈까요?',
+    actions: [{ label: '취소', primary: true }, { label: '연습 건너뛰기', onClick: () => {
+      if (T) logEvent('practice_skipped_by_researcher');
+      session.practice.skipped = true;
+      session.practice.skippedAt = iso();
+      T = null; navStack = [];
+      actPracticeFinish();
+    } }],
+  });
+}
+
+/* 인지 확인: '있었다' → 음성으로 답변 */
+function recTarget() {
+  if (view.name === 'recog') {
+    const tid = session.assignment[session.recogIndex].taskId;
+    return { qid: 'Recog' + tid, save: m => { session.recognitionAudio[tid] = m; }, meta: () => session.recognitionAudio[tid] || {} };
+  }
+  const qid = INTERVIEW_IDS[session.progress.interviewIndex || 0];
+  return { qid, save: m => { session.interview[qid] = m; }, meta: () => session.interview[qid] || {} };
+}
+function audioMetaOf(p, qid) {
+  if (!p) return {};
+  if (String(qid).startsWith('Recog')) return (p.recognitionAudio || {})[String(qid).slice(5)] || {};
+  return (p.interview || {})[qid] || {};
+}
+function recogAudioPanel() {
+  const tgt = recTarget();
+  const meta = tgt.meta();
+  let panel;
+  if (rec.status === 'recording' && rec.qid === tgt.qid) {
+    panel = `<p class="rec-status recording" role="status"><span aria-hidden="true">🔴</span> 녹음 중입니다</p>
+      <p class="rec-timer" id="recTimer">${fmtDuration(performance.now() - rec.startedPerf)}</p>
+      <button class="btn btn-stop btn-xl" data-act="recordStop">녹음 종료</button>`;
+  } else if (rec.status === 'starting' || rec.status === 'stopping') {
+    panel = `<p class="rec-status" role="status">${rec.status === 'starting' ? '녹음을 준비하고 있습니다…' : '녹음을 저장하고 있습니다…'}</p>`;
+  } else if (meta.recorded) {
+    panel = `<p class="rec-done" role="status">답변이 녹음되었습니다. <span class="rec-len">(${fmtDuration(meta.durationMs)})</span></p>
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn btn-secondary" data-act="recordPlay">▶ 들어보기</button>
+        <button class="btn btn-secondary" data-act="recordStart">다시 녹음하기</button>
+      </div>`;
+  } else if (meta.skipped) {
+    panel = `<p class="rec-done" role="status">답변하지 않기로 했습니다.</p>
+      <button class="btn btn-secondary" data-act="recordStart" style="margin-top:12px">🎙 녹음하기</button>`;
+  } else {
+    panel = `<button class="btn btn-primary btn-rec" data-act="recordStart">🎙 녹음 시작</button>
+      <button class="btn-text" data-act="recogAudioSkip">답변하지 않기</button>`;
+  }
+  // 마이크를 쓸 수 없을 때만 글로 적을 수 있게 함
+  const fallback = rec.micFailed ? `<label class="q-sub" for="recogText" style="margin-top:16px">녹음이 어려우면 글로 적어 주세요</label>
+      <textarea id="recogText" rows="4" placeholder="자유롭게 적어 주세요">${esc(recogDraft.text)}</textarea>` : '';
+  return `<div class="recog-audio">
+    <p class="q-sub">어떤 부분이 그렇게 느껴졌나요?</p>
+    <p class="recog-hint">녹음 버튼을 누르고 편하게 말씀해 주세요.</p>
+    <section class="rec-panel" style="margin-top:12px">${panel}</section>
+    <p class="form-error" id="recError" role="alert">${esc(rec.error || '')}</p>
+    ${fallback}
+  </div>`;
+}
+function actRecogAudioSkip() {
+  if (rec.status !== 'idle') return;
+  const tid = session.assignment[session.recogIndex].taskId;
+  session.recognitionAudio[tid] = { recorded: false, skipped: true, durationMs: 0, mimeType: '', storageType: '', audioKey: '', recordedAt: iso() };
+  saveStore();
+  render({ keepScroll: true });
+}
+
+/* 연구자 모드 표시용 */
+function practiceSummaryHTML(p) {
+  const pr = p.practice || {};
+  const runs = pr.runs || [];
+  const intro = p.progress && p.progress.introViewMs != null ? `안내 화면 ${(p.progress.introViewMs / 1000).toFixed(1)}초` : '안내 화면 -';
+  const runText = runs.length
+    ? runs.map(r => `${r.run}회차 ${fmtDuration(r.durationMs)} (안내 창 닫기 ${r.noticeCloseMs !== '' ? (r.noticeCloseMs / 1000).toFixed(1) + '초' : '-'}, 과제 보기 ${r.taskViews}회)`).join(' · ')
+    : '기록 없음';
+  return `<p class="r-meta">${intro} · 연습: ${pr.skipped ? '<b>연구자가 건너뜀</b> · ' : ''}${runText}</p>`;
+}
+const PRACTICE_CSV_COLUMNS = ['introViewMs', 'practiceRuns', 'practiceFirstDurationMs', 'practiceLastDurationMs', 'practiceNoticeCloseMs', 'practiceTaskViews', 'practiceSkipped'];
+function practiceCsvFields(p) {
+  const runs = (p.practice && p.practice.runs) || [];
+  return {
+    introViewMs: p.progress && p.progress.introViewMs != null ? p.progress.introViewMs : '',
+    practiceRuns: runs.length,
+    practiceFirstDurationMs: runs[0] ? runs[0].durationMs : '',
+    practiceLastDurationMs: runs.length ? runs[runs.length - 1].durationMs : '',
+    practiceNoticeCloseMs: runs[0] ? runs[0].noticeCloseMs : '',
+    practiceTaskViews: runs[0] ? runs[0].taskViews : '',
+    practiceSkipped: p.practice && p.practice.skipped ? 1 : 0,
+  };
+}
+
+Object.assign(SCREENS, {
+  studyIntro: screenStudyIntro, practiceIntro: screenPracticeIntro, practiceDone: screenPracticeDone,
+});
+const PRACTICE_ACTIONS = {
+  studyIntroNext: actStudyIntroNext, practiceStart: actPracticeStart, practiceFinish: actPracticeFinish,
+  recogAudioSkip: actRecogAudioSkip,
 };
 
 /* ─── 20. 이벤트 연결 · 시작 ───────────────────────────────────── */
@@ -2237,6 +2476,7 @@ const ACTIONS = {
   closeWarning: () => closeWarningByUser('x_button'),
   abortTap: actAbortTap,
   ...SURVEY_ACTIONS,
+  ...PRACTICE_ACTIONS,
 };
 
 document.addEventListener('click', e => {

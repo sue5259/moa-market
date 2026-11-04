@@ -11,7 +11,8 @@
  *   interviewMicPermission                         → interviewMicPermissionResult { granted }
  *   interviewRecordStart { participantId, questionId } → interviewRecordStarted
  *   interviewRecordStop  { participantId, questionId } → interviewRecordStopped { uri, fileName, durationMs, mimeType }
- *   interviewAudioPlay   { uri }                     → interviewAudioPlayed
+ *   interviewAudioPlay   { uri }                     → interviewAudioPlayed (끝나면 interviewAudioEnded 알림)
+ *   interviewAudioPause / interviewAudioResume       → interviewAudioPaused / interviewAudioResumed
  *   interviewAudioShare  { uri, fileName }           → interviewAudioShared
  *   interviewAudioDelete { participantId | all }     → interviewAudioDeleted { count }
  *   녹음 파일: 앱 문서 폴더/moa-interview/P01_interview_Q01.m4a (참가 번호와 질문 번호만 사용)
@@ -184,9 +185,28 @@ function Shell() {
         if (old) { try { old.pause(); (old.remove || old.release || (() => {})).call(old); } catch (e) { /* noop */ } }
         const player = ExpoAudio.createAudioPlayer({ uri: msg.uri });
         playerRef.current = player;
+        if (player.addListener) {
+          player.addListener('playbackStatusUpdate', st => {
+            if (st && st.didJustFinish && playerRef.current === player) reply({ type: 'interviewAudioEnded', uri: msg.uri });
+          });
+        }
         player.play();
         done('interviewAudioPlayed');
       } catch (e) { fail('interviewAudioPlayed', e); }
+      return;
+    }
+    if (msg.type === 'interviewAudioPause') {
+      try { if (playerRef.current) playerRef.current.pause(); done('interviewAudioPaused'); }
+      catch (e) { fail('interviewAudioPaused', e); }
+      return;
+    }
+    if (msg.type === 'interviewAudioResume') {
+      try {
+        if (!playerRef.current) throw new Error('no_player');
+        await setRecordingMode(false);
+        playerRef.current.play();
+        done('interviewAudioResumed');
+      } catch (e) { fail('interviewAudioResumed', e); }
       return;
     }
     if (msg.type === 'interviewAudioShare') {

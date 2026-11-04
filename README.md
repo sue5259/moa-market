@@ -22,17 +22,18 @@
 - 상품명은 한국어 표기 (데일리 텀블러, 슬림 텀블러 등). 상품 ID는 영문 그대로(tumbler, buds …)
 
 ## 실험 흐름 (설문·인터뷰 포함)
-참가 번호 → **실험 안내** → **사전설문(3화면)** → **연습 과제(모눈 노트 구매)** → 공통 안내 → 과제 5개 → 인지 확인 → **사후설문(경고 방식 4개 × 4문항 + 최종 선호)** → **사후 인터뷰(7문항 음성 녹음)** → 종료
+참가 번호 → **실험 안내** → **사전설문(3화면)** → **연습 과제(모눈 노트 구매)** → 공통 안내 → 과제 5개 → 인지 확인 → **사후설문(경고 방식 4개 × 4문항 + 최종 선호)** → **사후 인터뷰(4문항 음성 녹음)** → 종료
 - phase: `preSurvey → practice → tasks → recognition → postSurvey → interview → done` (단계마다 저장, 같은 번호로 이어하기)
 - 기존 데이터에는 `preSurvey / postSurvey / interview / progress`가 자동 보완됨
-- `completedAt`은 인터뷰 Q7까지 녹음 또는 '답변하지 않기' 후에만 기록
+- `completedAt`은 인터뷰 Q4까지 녹음 또는 '답변하지 않기' 후에만 기록
 - 녹음: iPhone 앱 = expo-audio 녹음 → 앱 문서 폴더 `moa-interview/P01_interview_Q01.m4a` / 브라우저 = MediaRecorder → IndexedDB `MOAExperimentAudio.recordings` (키 `P01_Q01`). localStorage에는 녹음 정보(metadata)만 저장
+- 녹음 듣기 버튼: ▶ 들어보기 → ⏸ 일시정지 → ▶ 이어 듣기 (iPhone은 새 App.js 필요)
 - 연구자 모드: 사전설문·사후설문·인터뷰 기록 CSV, 질문별 녹음 재생·공유(다운로드). 참가자 삭제/전체 삭제 시 녹음 파일도 삭제
 - JSON 백업에는 음성 파일이 들어가지 않음 → 녹음은 연구자 모드에서 질문별로 공유해 따로 보관
 
 ## 실험 안내 · 연습
-- 실험 안내: 참가 번호 입력 직후 1회. 소요 시간은 `app.js`의 `STUDY_DURATION_TEXT`('약 40분')
-- 연습 과제: "모눈 노트 1개를 구매하려고 하는 상황입니다." 결제 화면에서 중립 안내 창(배송 안내, X로 닫기). 경고·소리·진동·다크패턴 없음
+- 실험 안내: 참가 번호 입력 직후 1회. 소요 시간은 `app.js`의 `STUDY_DURATION_TEXT`('약 20~30분')
+- 연습 과제: "모눈 노트 1개를 구매하려고 하는 상황입니다." (홈 '오늘의 추천 상품'에 모눈 노트 표시) 결제 화면에서 중립 안내 창(배송 안내, X로 닫기). 경고·소리·진동·다크패턴 없음
 - 연습 결과는 과제 CSV에 들어가지 않음 → 사전설문 CSV의 introViewMs, practiceRuns, practiceFirstDurationMs, practiceLastDurationMs, practiceNoticeCloseMs, practiceTaskViews, practiceSkipped
 - 연습 중 '과제 보기' 제목 3초 안에 5번 → 연구자용 연습 건너뛰기
 - 인지 확인: '있었다' → 음성으로 답변(녹음·들어보기·다시 녹음·답변하지 않기). 마이크를 쓸 수 없을 때만 글 입력. 과제 CSV에 recognitionRecorded / recognitionDurationMs / recognitionAudioKey, 녹음 파일 이름 `P01_interview_RecogN.m4a`(iPhone) · IndexedDB 키 `P01_RecogN`(브라우저)

@@ -728,7 +728,7 @@ function screenHome() {
       <button class="search-bar" data-act="go" data-to="list">${icon('search', 2.4)}<span>상품을 검색해 보세요</span></button>
       <section class="banner"><p class="banner-kicker">이번 주 기획전</p><p class="banner-title">가을 생활용품 모음</p><p class="banner-sub">매일 쓰는 물건을 새로 준비해 보세요</p></section>
       <h2 class="section-title">오늘의 추천 상품</h2>
-      <div class="grid">${['tumbler', 'mug', 'towel', 'tote'].map(productCard).join('')}</div>
+      <div class="grid">${['tumbler', 'mug', 'notebook', 'tote'].map(productCard).join('')}</div>
       <button class="btn btn-secondary" data-act="go" data-to="list">생활용품 전체 보기</button>
     </main>${bottomNav('home')}</div>`;
 }
@@ -1265,6 +1265,7 @@ function actRecogNext() {
     recognitionStorageType: am.recorded ? am.storageType : '',
     recognitionAnsweredAt: iso(),
   };
+  stopPlayback();
   rec = { status: 'idle', qid: null, error: '', micFailed: rec.micFailed };
   session.recogIndex++;
   session.updatedAt = iso();
@@ -1592,13 +1593,10 @@ const POST_ITEMS = [
 
 // 사후 인터뷰 질문
 const INTERVIEW_QUESTIONS = [
-  ['Q01', '과제를 수행하면서 경고가 나타났을 때 가장 먼저 어떤 느낌이 들었나요?'],
-  ['Q02', '경고 때문에 화면이나 선택지를 다시 확인한 경우가 있었나요? 있었다면 어떤 상황이었나요?'],
-  ['Q03', '경고 때문에 원래 하려고 했던 선택을 다시 생각하거나 바꾼 경우가 있었나요? 그 이유는 무엇인가요?'],
-  ['Q04', '화면에만 경고가 나타난 경우와 소리나 진동이 함께 나타난 경우에는 어떤 차이가 있었나요?'],
-  ['Q05', '소리와 진동 중 어떤 자극이 더 도움이 되었나요? 그 이유는 무엇인가요?'],
-  ['Q06', '소리와 진동이 동시에 나타난 경고는 도움이 되었나요, 아니면 과하거나 부담스럽게 느껴졌나요? 그 이유는 무엇인가요?'],
-  ['Q07', '실제 쇼핑이나 모바일 서비스를 이용할 때 어떤 경고 방식이 가장 적절하다고 생각하시나요? 그 이유는 무엇인가요?'],
+  ['Q01', '과제를 하면서 경고 창이 나타났을 때, 어떤 느낌이 드셨나요?'],
+  ['Q02', '경고를 보고 화면을 다시 살펴보거나, 하려던 선택을 바꾼 적이 있었나요? 있었다면 어떤 상황이었는지 말씀해 주세요.'],
+  ['Q03', '화면에만 경고가 나온 때와, 소리나 진동이 함께 나온 때는 어떻게 달랐나요?'],
+  ['Q04', '실제 모바일 서비스를 이용한다면 어떤 경고 방식이 가장 적절하다고 생각하시나요? 그 이유는 무엇인가요?'],
 ];
 const INTERVIEW_IDS = INTERVIEW_QUESTIONS.map(q => q[0]);
 const MIC_UNAVAILABLE_MESSAGE = '마이크를 사용할 수 없습니다. 연구자에게 알려 주세요.';
@@ -1839,6 +1837,7 @@ function nativeAudioRequest(payload, timeoutMs = 12000) {
   });
 }
 function handleInterviewNative(msg) {
+  if (msg.type === 'interviewAudioEnded') { onPlaybackEnded(); return; }   // 앱에서 재생이 끝났다는 알림
   const p = nativeAudioPending[msg.id];
   if (!p) return;
   clearTimeout(p.timer);
@@ -1961,8 +1960,47 @@ async function actRecordStop() {
   render({ keepScroll: true });
 }
 
+// 재생 상태: idle | playing | paused (key = 참가번호_질문)
+let playState = { key: null, status: 'idle', native: false };
 function stopPlayback() {
   if (playingAudio) { try { playingAudio.pause(); URL.revokeObjectURL(playingAudio.src); } catch (e) { /* noop */ } playingAudio = null; }
+  if (playState.native && playState.status === 'playing') nativeAudioRequest({ type: 'interviewAudioPause' }, 3000);
+  playState = { key: null, status: 'idle', native: false };
+}
+function onPlaybackEnded() {
+  if (playState.status === 'idle') return;
+  playState = { key: null, status: 'idle', native: false };
+  refreshPlayButtons();
+}
+function playLabel(pid, qid, base) {
+  if (playState.key !== audioKeyOf(pid, qid)) return base;
+  return playState.status === 'playing' ? '⏸ 일시정지' : playState.status === 'paused' ? '▶ 이어 듣기' : base;
+}
+function refreshPlayButtons() {
+  document.querySelectorAll('[data-act="recordPlay"]').forEach(b => {
+    b.textContent = playLabel(session && session.participantId, recTarget().qid, b.dataset.base || '▶ 들어보기');
+  });
+}
+// 참가자 화면의 듣기 버튼: 처음 누르면 재생, 재생 중이면 일시정지, 멈춰 있으면 이어 듣기
+async function togglePlayback(pid, qid) {
+  const key = audioKeyOf(pid, qid);
+  if (playState.key === key && playState.status === 'playing') {
+    if (playState.native) {
+      const r = await nativeAudioRequest({ type: 'interviewAudioPause' }, 3000);
+      if (!r.ok) { showToast('일시정지를 하려면 iPhone 앱(App.js) 업데이트가 필요합니다.'); return; }
+    } else if (playingAudio) playingAudio.pause();
+    playState.status = 'paused';
+  } else if (playState.key === key && playState.status === 'paused') {
+    if (playState.native) {
+      const r = await nativeAudioRequest({ type: 'interviewAudioResume' }, 3000);
+      if (!r.ok) { showToast('이어 듣기를 하지 못했습니다.'); return; }
+    } else if (playingAudio) await playingAudio.play();
+    playState.status = 'playing';
+  } else {
+    const ok = await playRecording(pid, qid);
+    if (ok) playState = { key, status: 'playing', native: audioMetaOf(store.participants[pid], qid).storageType === 'native' };
+  }
+  refreshPlayButtons();
 }
 async function playRecording(pid, qid) {
   const meta = audioMetaOf(store.participants[pid], qid);
@@ -1978,6 +2016,7 @@ async function playRecording(pid, qid) {
     const item = await idbGet(meta.audioKey);
     if (!item || !item.blob) { showToast('녹음 파일을 찾을 수 없습니다.'); return false; }
     playingAudio = new Audio(URL.createObjectURL(item.blob));
+    playingAudio.onended = onPlaybackEnded;
     await playingAudio.play();
     return true;
   } catch (e) {
@@ -2032,7 +2071,7 @@ async function actInterviewStart(d, el) {
   go('interview', {}, { push: false });
 }
 function screenInterview() {
-  const idx = session.progress.interviewIndex || 0;
+  const idx = Math.min(session.progress.interviewIndex || 0, INTERVIEW_QUESTIONS.length - 1);
   const [qid, text] = INTERVIEW_QUESTIONS[idx];
   const meta = session.interview[qid] || {};
   const isLast = idx === INTERVIEW_QUESTIONS.length - 1;
@@ -2047,7 +2086,7 @@ function screenInterview() {
   } else if (meta.recorded) {
     panel = `<p class="rec-done" role="status">답변이 녹음되었습니다. <span class="rec-len">(${fmtDuration(meta.durationMs)})</span></p>
       <div class="btn-stack" style="margin-top:16px">
-        <button class="btn btn-secondary btn-xl" data-act="recordPlay">▶ 답변 들어보기</button>
+        <button class="btn btn-secondary btn-xl" data-act="recordPlay" data-base="▶ 답변 들어보기">${playLabel(session.participantId, qid, '▶ 답변 들어보기')}</button>
         <button class="btn btn-secondary btn-xl" data-act="recordStart">다시 녹음하기</button>
         <button class="btn btn-primary btn-xl" data-act="interviewNext">${nextLabel}</button>
       </div>`;
@@ -2078,7 +2117,7 @@ function actInterviewSkip() {
 }
 function actInterviewNext() {
   if (rec.status !== 'idle') return;
-  const idx = session.progress.interviewIndex || 0;
+  const idx = Math.min(session.progress.interviewIndex || 0, INTERVIEW_IDS.length - 1);
   const meta = session.interview[INTERVIEW_IDS[idx]];
   if (!meta || !(meta.recorded || meta.skipped)) return;
   stopPlayback();
@@ -2236,14 +2275,14 @@ const SURVEY_ACTIONS = {
   postReplay: d => { ensureAudio(); triggerWarning(d.cond); },
   surveyPick: actSurveyPick,
   interviewStart: actInterviewStart, recordStart: actRecordStart, recordStop: actRecordStop,
-  recordPlay: () => playRecording(session.participantId, recTarget().qid),
+  recordPlay: () => togglePlayback(session.participantId, recTarget().qid),
   interviewSkip: actInterviewSkip, interviewNext: actInterviewNext,
   dbgGoPre, dbgFillPre, dbgGoPost, dbgFillPost, dbgGoInterview,
   rPreCsv, rPostCsv, rInterviewCsv, rPlayAudio, rSaveAudio,
 };
 
 /* ─── 19-B. 실험 안내 · 연습 과제 · 인지 확인 음성 답변 ─────────────── */
-const STUDY_DURATION_TEXT = '약 40분';                     // 실험 안내에 표시되는 전체 소요 시간
+const STUDY_DURATION_TEXT = '약 20~30분';                     // 실험 안내에 표시되는 전체 소요 시간
 const PRACTICE_NOTICE = { title: '배송 안내', body: '오늘 주문하면 내일 도착합니다.' };
 TASK_TEXT.PR = { instruction: '모눈 노트 1개를 구매하려고 하는 상황입니다. 구매를 진행해 주세요.' };
 TASK_PRODUCT.PR = 'notebook';                               // 연습에서만 구매 가능
@@ -2392,7 +2431,7 @@ function recogAudioPanel() {
   } else if (meta.recorded) {
     panel = `<p class="rec-done" role="status">답변이 녹음되었습니다. <span class="rec-len">(${fmtDuration(meta.durationMs)})</span></p>
       <div class="btn-row" style="margin-top:12px">
-        <button class="btn btn-secondary" data-act="recordPlay">▶ 들어보기</button>
+        <button class="btn btn-secondary" data-act="recordPlay" data-base="▶ 들어보기">${playLabel(session.participantId, tgt.qid, '▶ 들어보기')}</button>
         <button class="btn btn-secondary" data-act="recordStart">다시 녹음하기</button>
       </div>`;
   } else if (meta.skipped) {

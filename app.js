@@ -82,7 +82,13 @@ const TASK_TEXT = {
 };
 
 // 각 과제에서 경고·T0가 발생하는 핵심 의사결정 화면
-const DECISION_SCREEN = { N: 'nagSecond', O: 'retention', S: 'checkout', I: 'plusOffer', F: 'shareOffer' };
+// N은 텀블러 상세 화면 위에 처음 뜨는 슬림 텀블러 권유 창(nagFirst)이 의사결정 화면 (11/6 변경, 이전: 2차 추천 화면)
+const DECISION_SCREEN = { N: 'nagFirst', O: 'retention', S: 'checkout', I: 'plusOffer', F: 'shareOffer' };
+function isDecisionView() {
+  if (!T) return false;
+  if (T.taskId === 'N') return view.name === 'detail' && T.nag1Open && (view.params || {}).id === 'tumbler';
+  return view.name === DECISION_SCREEN[T.taskId];
+}
 
 // 선택값 → 저항(1) / 순응(0)
 const CHOICE_RESISTANCE = {
@@ -453,13 +459,13 @@ function render(opts = {}) {
 
 // 의사결정 화면이 DOM에 들어간 바로 그 순간: T0 기록 + 경고 실행 (모든 조건 동일 기준)
 function afterRender() {
-  if (T && !T.finished && view.name === DECISION_SCREEN[T.taskId] && !T.decision) beginDecision();
+  if (T && !T.finished && isDecisionView() && !T.decision) beginDecision();
   if (T && T.practice && view.name === 'checkout' && T.noticeShownPerf == null) showPracticeNotice();
 }
 function beginDecision() {
   const t0 = performance.now();
   const w = triggerWarning(T.condition);
-  T.decision = { screen: view.name, t0, shownAt: iso(), t1: null, madeAt: null, choice: null, responseTimeMs: null, ...w };
+  T.decision = { screen: DECISION_SCREEN[T.taskId], t0, shownAt: iso(), t1: null, madeAt: null, choice: null, responseTimeMs: null, ...w };
   logEvent('decision_screen_shown', {
     condition: T.condition, visualShown: w.visualShown, audioTriggered: w.audioTriggered,
     hapticTriggered: w.hapticTriggered, hapticError: w.hapticError || undefined,
@@ -486,7 +492,7 @@ function newTaskState(taskId, condition, order) {
     cart: taskId === 'F' ? [{ id: TASK_PRODUCT.F }] : [],
     member: taskId === 'O',
     orderItems: [],
-    nag1Shown: false, nag1Open: false, nagIntent: null,
+    nag1Shown: false, nag1Open: false, nag2Shown: false, nagSecondChoice: '', nagIntent: null,
     addon: true, addonToggleCount: 0, optionFirstChangeMs: null,
     plusTrial: false, shared: false,
     decision: null, finished: false, events: [],
@@ -534,7 +540,7 @@ function finishTask(outcome) {
     hapticError: d.hapticError === 'awaiting_app_ack' ? 'no_app_ack' : (d.hapticError || ''),
     hapticAckLatencyMs: d.hapticAckLatencyMs ?? '',
     optionChanged: '', optionChangeTime: '', optionToggleCount: '', finalOptionSelected: '',
-    paidAmount: '', finalCancellationCompleted: '', finalChoice: '', budsSelected: '', nagFirstChoice: '', orderItems: '',
+    paidAmount: '', finalCancellationCompleted: '', finalChoice: '', budsSelected: '', nagFirstChoice: '', nagSecondChoice: '', orderItems: '',
     t0Ms: round1(d.t0), t1Ms: round1(d.t1),
     decisionShownAt: d.shownAt || '', decisionMadeAt: d.madeAt || '',
     taskStartedAt: T.startedAt,
@@ -706,7 +712,7 @@ function screenEnd() {
 function decisionPreview(taskId) {
   const ctx = { taskId, condition: 'NW', decision: null, addon: true, orderItems: [TASK_PRODUCT[taskId] || 'tumbler'], plusTrial: false, shared: false };
   switch (taskId) {
-    case 'N': return screenNagSecond({}, ctx, true);
+    case 'N': return screenDetail({ id: 'tumbler', nagPreview: true });
     case 'O': return screenRetention({}, ctx, true);
     case 'S': return screenCheckout({}, ctx, true);
     case 'I': return screenPlusOffer({}, ctx, true);
@@ -744,14 +750,15 @@ function screenList() {
     <main class="content"><p class="muted" style="margin-bottom:10px">상품 ${ids.length}개</p><ul class="plist">${ids.map(row).join('')}</ul></main>
     ${bottomNav('list')}</div>`;
 }
-function screenDetail({ id }) {
+function screenDetail({ id, nagPreview = false }) {
   const p = PRODUCTS[id] || PRODUCTS.tumbler;
-  const showNag1 = T && T.taskId === 'N' && T.nag1Open && id === 'tumbler';
+  const showNag1 = nagPreview || (T && T.taskId === 'N' && T.nag1Open && id === 'tumbler');
+  const pvb = pv(nagPreview);
   const actions = isAvailable(p)
     ? `<div class="btn-row"><button class="btn btn-secondary" data-act="addToCart" data-id="${p.id}">장바구니 담기</button>
        <button class="btn btn-primary" data-act="buyNow" data-id="${p.id}">구매하기</button></div>`
     : '<button class="btn btn-secondary" disabled>일시품절</button>';
-  return `<div class="screen">${topBar({ title: '상품 정보' })}
+  return `<div class="screen">${topBar({ title: '상품 정보', back: nagPreview ? false : undefined, preview: nagPreview })}
     <main class="content">
       <div class="detail-art">${art(p.art)}</div>
       <h2 class="detail-name">${p.name}</h2><p class="detail-desc">${p.desc}</p>
@@ -763,8 +770,8 @@ function screenDetail({ id }) {
     ${showNag1 ? `<div class="sheet-backdrop"><div class="sheet" role="dialog" aria-modal="true">
       <div class="sheet-row">${art('slim')}<p class="sheet-text">${PRODUCTS.slim.name}가 현재 30% 할인 중입니다.</p></div>
       <div class="btn-stack" style="margin-top:0">
-        <button class="btn btn-primary btn-xl" data-act="nagFirstView">상품 확인하러 가기</button>
-        <button class="btn btn-secondary btn-xl" data-act="closeNagFirst">계속 쇼핑하기</button>
+        <button class="btn btn-primary btn-xl" data-act="nagFirstView" ${pvb}>상품 확인하러 가기</button>
+        <button class="btn btn-secondary btn-xl" data-act="closeNagFirst" ${pvb}>계속 쇼핑하기</button>
       </div></div></div>` : ''}
   </div>`;
 }
@@ -1080,16 +1087,18 @@ function actOpenProduct({ id }) {
   }
   go('detail', { id });
 }
-// 1차 추천에서 '상품 확인하러 가기' (측정 대상 아님, 2차 추천 화면은 그대로 유지)
+// 1차 권유 창 = 측정 화면: '상품 확인하러 가기' = 순응(view_discount), '계속 쇼핑하기' = 저항(continue_shopping)
 function actNagFirstView() {
   if (!T || !T.nag1Open) return;
+  recordDecision('view_discount');
   T.nag1Open = false;
   T.nagFirstChoice = 'view_product';
   logEvent('nag_first_view_product');
   go('detail', { id: 'slim' });
 }
 function actCloseNagFirst() {
-  if (!T) return;
+  if (!T || !T.nag1Open) return;
+  recordDecision('continue_shopping');
   T.nag1Open = false;
   T.nagFirstChoice = 'continue_shopping';
   logEvent('nag_first_closed');
@@ -1099,14 +1108,14 @@ function actAddToCart({ id }) {
   if (!T) return;
   addCart(id);
   logEvent('add_to_cart', { id });
-  if (T.taskId === 'N' && id === 'tumbler' && !T.decision) { T.nagIntent = 'cart'; go('nagSecond'); return; }
+  if (T.taskId === 'N' && id === 'tumbler' && !T.nag2Shown) { T.nag2Shown = true; T.nagIntent = 'cart'; go('nagSecond'); return; }
   go('cart');
 }
 function actBuyNow({ id }) {
   if (!T) return;
   logEvent('buy_now', { id });
   T.orderItems = [id];
-  if (T.taskId === 'N' && id === 'tumbler' && !T.decision) { T.nagIntent = 'buy'; go('nagSecond'); return; }
+  if (T.taskId === 'N' && id === 'tumbler' && !T.nag2Shown) { T.nag2Shown = true; T.nagIntent = 'buy'; go('nagSecond'); return; }
   proceedToOrder();
 }
 function actOrderFromCart() {
@@ -1125,8 +1134,11 @@ function proceedToOrder() {
 }
 
 // TASK 01 Nagging
+// 2차 추천 화면: 반복 권유만 보여 줌 (경고·측정 없음, 선택은 nagSecondChoice로 기록)
 function actNagChoice({ c }) {
-  if (!recordDecision(c)) return;
+  if (!T || T.finished || T.nagSecondChoice) return;
+  T.nagSecondChoice = c;
+  logEvent('nag_second_choice', { choice: c });
   if (c === 'view_discount') go('detail', { id: 'slim' });
   else if (T.nagIntent === 'buy') finishNagging();
   else go('cart');
@@ -1136,10 +1148,10 @@ function finishNagging() {
   logEvent('purchase_prep_reached', { items: items.join('|') });
   const d = T.decision;
   finishTask({
-    resistance: d ? CHOICE_RESISTANCE.N[d.choice] : '',
+    resistance: d && d.choice ? CHOICE_RESISTANCE.N[d.choice] : '',
     taskSuccess: items.includes('tumbler') ? 1 : 0,
     extra: { budsSelected: items.includes('slim') ? 1 : 0,   // 열 이름은 기존 유지: 추천 상품(슬림 텀블러) 담김 여부
-                 nagFirstChoice: T.nagFirstChoice || '', orderItems: items.join('|') },
+                 nagFirstChoice: T.nagFirstChoice || '', nagSecondChoice: T.nagSecondChoice || '', orderItems: items.join('|') },
   });
   endTaskView();
 }
@@ -1368,7 +1380,7 @@ const CSV_COLUMNS = [
   'taskViewCount', 'taskViewAtDecision', 'abortedByResearcher',
   'visualShown', 'audioTriggered', 'audioPreset', 'audioContextState', 'hapticSupported', 'hapticMethod', 'hapticTriggered', 'hapticAckLatencyMs', 'hapticError',
   'optionChanged', 'optionChangeTime', 'optionToggleCount', 'finalOptionSelected', 'paidAmount',
-  'finalCancellationCompleted', 'finalChoice', 'budsSelected', 'nagFirstChoice', 'orderItems',
+  'finalCancellationCompleted', 'finalChoice', 'budsSelected', 'nagFirstChoice', 'nagSecondChoice', 'orderItems',
   'recognitionYesNo', 'recognitionText', 'recognitionRecorded', 'recognitionDurationMs', 'recognitionAudioKey', 'attempts',
   't0Ms', 't1Ms', 'decisionShownAt', 'decisionMadeAt', 'taskStartedAt', 'timestamp',
   'userAgent', 'screenWidth', 'screenHeight', 'events',

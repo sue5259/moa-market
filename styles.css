@@ -328,6 +328,8 @@ ul { margin: 0; padding: 0; list-style: none; }
   pointer-events: none; user-select: none;
 }
 .preview-frame .topbar { position: static; }
+.preview-frame { position: relative; }
+.preview-frame .sheet-backdrop { position: absolute; }  /* N 인지 확인: 권유 창을 미리보기 틀 안에 표시 */
 .recog-q { margin-top: 20px; }
 .q-title { font-size: 21px; font-weight: 800; line-height: 1.45; }
 .choice-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0; }

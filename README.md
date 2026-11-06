@@ -16,7 +16,7 @@
 - 시각 경고: 의사결정 화면 위에 살짝 어두운 배경 + 가운데 경고 카드(제목 "선택하기 전에 확인해 주세요", 본문 "화면의 정보를 다시 살펴보고, 원하는 선택이 맞는지 확인해 주세요."), 오른쪽 위 X(48×48)로 닫기. V·VA·VH·VAH 동일. X 닫기는 응답으로 기록하지 않음
 - 참가 번호 입력 후 공통 안내 화면 1회 ("실제 앱을 사용하는 것처럼 … 정답은 없습니다.")
 - 시작 화면: N·S·I → 홈, O → MY, F → 장바구니(토트백 1개 담김)
-- Nagging 추천 상품: 슬림 텀블러 (정상가 32,000원, 30% 할인 22,400원, 내부 ID `slim`). CSV `budsSelected` 열은 이름만 유지하고 '추천 상품 선택 여부'를 뜻함
+- Nagging 추천 상품: 슬림 텀블러 (정상가 32,000원, 30% 할인 22,400원, 내부 ID `slim`). CSV `budsSelected` 열은 이름만 유지하고 '추천 상품 선택 여부'를 뜻함. 11/6 이전 데이터(P01–P04)는 2차 추천이 측정 화면이었음: P01–P03은 1차 권유에서 슬림 텀블러로 이동해 바로 구매해 N 과제 경고가 노출되지 않음
 - 과제별 대상 상품: N·S 데일리 텀블러(29,000원), I 스톤 머그컵(15,900원), F 캔버스 토트백(19,800원). 대상 상품은 그 과제에서만 구매 가능
 - I·F의 taskSuccess = 대상 상품 구매 완료
 - 상품명은 한국어 표기 (데일리 텀블러, 슬림 텀블러 등). 상품 ID는 영문 그대로(tumbler, buds …)
@@ -69,7 +69,7 @@ CSV `hapticMethod` 열에 방식(`native-app` / `vibrate`)이 기록됩니다. i
 데이터는 **실험한 기기의 그 앱/브라우저 안**에만 저장됩니다. 세션이 끝날 때마다 연구자 모드에서
 **CSV 다운로드** / **JSON 백업 다운로드** (iPhone 앱에서는 공유 화면 → AirDrop·메일·파일 앱).
 
-## 주요 저장 열 (CSV)
+| N Nagging | 데일리 텀블러를 구매하려고 하는 상황입니다. 구매를 진행해 주세요. | 홈 | 데일리 텀블러 29,000원 | **1차 권유(측정 화면, 11/6 변경)**: 텀블러 상세 첫 진입 시 바텀시트 "슬림 텀블러가 현재 30% 할인 중입니다." [상품 확인하러 가기] [계속 쇼핑하기] — 이 창이 뜨는 순간 T0·경고. 2차 추천 "할인 상품을 다시 확인해보세요"는 텀블러를 담거나 구매할 때 한 번 더 뜨는 반복 권유(경고·측정 없음, 선택은 CSV nagSecondChoice) | 상품 확인하러 가기 (choice=view_discount) | 계속 쇼핑하기 (choice=continue_shopping) |
 participantId, taskOrder, taskId, taskType, condition, choice, resistance, responseTimeMs, responseTimeSec, taskSuccess,
 visualShown, audioTriggered, audioPreset, hapticSupported, hapticMethod, hapticTriggered, hapticAckLatencyMs, optionChanged, optionChangeTime(T0 기준 ms),
 finalCancellationCompleted, recognitionYesNo, recognitionText, attempts, t0Ms, t1Ms, timestamp, userAgent, screenWidth, screenHeight, events(JSON)

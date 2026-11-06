@@ -69,3 +69,4 @@ Mac이 "들어오는 네트워크 연결을 허용할까요?"라고 물으면 **
 - Expo Go를 삭제하면 녹음도 사라집니다
 - 녹음 듣기 중 **일시정지/이어 듣기**는 11월 4일 이후 App.js가 필요합니다 (`grep -c interviewAudioPause ~/moa-app/App.js` 결과가 1 이상이면 최신)
 - 연구자 모드의 **이 참가자 녹음 모두 공유**(zip)는 11월 6일 이후 App.js가 필요합니다 (`grep -c interviewAudioShareAll ~/moa-app/App.js` 결과가 1 이상이면 최신)
+- 연구자 모드의 **전체 내보내기**(CSV·JSON·녹음 zip)도 11월 6일 이후 App.js가 필요합니다 (`grep -c interviewExportAll ~/moa-app/App.js` 결과가 1 이상이면 최신)

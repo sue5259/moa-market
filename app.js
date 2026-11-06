@@ -1471,6 +1471,7 @@ function renderResearcher() {
   appEl.innerHTML = `<main class="researcher">
     <header class="r-head"><h1>연구자 모드</h1><p>참가자 ${parts.length}명 · 완료된 과제 기록 ${rows.filter(r => r.status === 'completed').length}건 · 저장 위치: 이 기기 브라우저(localStorage)</p></header>
     <section class="r-actions">
+      <button class="btn btn-primary r-export-all" data-act="rExportAll">전체 내보내기 (CSV·JSON·녹음 zip)</button>
       <button class="btn btn-primary" data-act="rCsv">CSV 다운로드${NATIVE_APP ? ' (공유)' : ''}</button>
       <button class="btn btn-secondary" data-act="rJson">JSON 백업 다운로드${NATIVE_APP ? ' (공유)' : ''}</button>
       <button class="btn btn-secondary" data-act="rPreCsv">사전설문 CSV</button>
@@ -2179,32 +2180,19 @@ const POST_CSV_COLUMNS = ['participantId', ...POST_CONDITIONS.flatMap(c => POST_
 const INTERVIEW_CSV_COLUMNS = ['participantId', 'questionId', 'recorded', 'skipped', 'durationMs', 'mimeType', 'storageType', 'audioKey', 'recordedAt'];
 const csvOf = (cols, rows) => '﻿' + [cols.join(','), ...rows.map(r => cols.map(c => csvCell(r[c])).join(','))].join('\r\n');
 function rPreCsv() {
-  const rows = sortedParticipants().filter(p => Object.keys(p.preSurvey).length)
-    .map(p => ({ participantId: p.participantId, ...p.preSurvey, ...practiceCsvFields(p) }));
-  if (!rows.length) { alert('사전설문 데이터가 없습니다.'); return; }
-  download(`moa_presurvey_${stamp()}.csv`, csvOf(PRE_CSV_COLUMNS, rows), 'text/csv;charset=utf-8');
+  const text = preCsvText();
+  if (!text) { alert('사전설문 데이터가 없습니다.'); return; }
+  download(`moa_presurvey_${stamp()}.csv`, text, 'text/csv;charset=utf-8');
 }
 function rPostCsv() {
-  const rows = sortedParticipants().filter(p => Object.keys(p.postSurvey).length).map(p => {
-    const r = { participantId: p.participantId, preferredCondition: p.postSurvey.preferredCondition, completedAt: p.postSurvey.completedAt };
-    POST_CONDITIONS.forEach(c => POST_ITEMS.forEach(([k]) => { r[`${c}_${k}`] = (p.postSurvey[c] || {})[k]; }));
-    return r;
-  });
-  if (!rows.length) { alert('사후설문 데이터가 없습니다.'); return; }
-  download(`moa_postsurvey_${stamp()}.csv`, csvOf(POST_CSV_COLUMNS, rows), 'text/csv;charset=utf-8');
+  const text = postCsvText();
+  if (!text) { alert('사후설문 데이터가 없습니다.'); return; }
+  download(`moa_postsurvey_${stamp()}.csv`, text, 'text/csv;charset=utf-8');
 }
 function rInterviewCsv() {
-  const rows = [];
-  sortedParticipants().filter(p => Object.keys(p.interview).length || Object.keys(p.recognitionAudio || {}).length).forEach(p => {
-    const recogIds = p.assignment.map(a => 'Recog' + a.taskId).filter(q => audioMetaOf(p, q).recorded || audioMetaOf(p, q).skipped);
-    [...recogIds, ...INTERVIEW_IDS].forEach(q => {
-      const m = audioMetaOf(p, q);
-      rows.push({ participantId: p.participantId, questionId: q, recorded: m.recorded ? 1 : 0, skipped: m.skipped ? 1 : 0,
-        durationMs: m.durationMs ?? '', mimeType: m.mimeType || '', storageType: m.storageType || '', audioKey: m.audioKey || '', recordedAt: m.recordedAt || '' });
-    });
-  });
-  if (!rows.length) { alert('인터뷰 데이터가 없습니다.'); return; }
-  download(`moa_interview_${stamp()}.csv`, csvOf(INTERVIEW_CSV_COLUMNS, rows), 'text/csv;charset=utf-8');
+  const text = interviewCsvText();
+  if (!text) { alert('인터뷰 데이터가 없습니다.'); return; }
+  download(`moa_interview_${stamp()}.csv`, text, 'text/csv;charset=utf-8');
 }
 function participantStatusTag(p) {
   const done = Object.keys(p.results).length;
@@ -2281,6 +2269,7 @@ const SURVEY_ACTIONS = {
   dbgGoPre, dbgFillPre, dbgGoPost, dbgFillPost, dbgGoInterview,
   rPreCsv, rPostCsv, rInterviewCsv, rPlayAudio, rSaveAudio,
   rShareAllAudio: d => rShareAllAudio(d),
+  rExportAll: () => rExportAll(),
 };
 
 /* ─── 19-B. 실험 안내 · 연습 과제 · 인지 확인 음성 답변 ─────────────── */
@@ -2601,6 +2590,107 @@ async function rShareAllAudio({ id }) {
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   } catch (e) { alert('녹음 묶기 실패: ' + e.message); }
+}
+
+/* ─── 19-D. 전체 내보내기 (CSV 4종 + JSON 백업 + 모든 녹음 → zip 하나) ──── */
+function tasksCsvText() {
+  const rows = buildExportRows();
+  return rows.length ? '﻿' + toCSV(rows) : null;
+}
+function preCsvText() {
+  const rows = sortedParticipants().filter(p => Object.keys(p.preSurvey).length)
+    .map(p => ({ participantId: p.participantId, ...p.preSurvey, ...practiceCsvFields(p) }));
+  return rows.length ? csvOf(PRE_CSV_COLUMNS, rows) : null;
+}
+function postCsvText() {
+  const rows = sortedParticipants().filter(p => Object.keys(p.postSurvey).length).map(p => {
+    const r = { participantId: p.participantId, preferredCondition: p.postSurvey.preferredCondition, completedAt: p.postSurvey.completedAt };
+    POST_CONDITIONS.forEach(c => POST_ITEMS.forEach(([k]) => { r[`${c}_${k}`] = (p.postSurvey[c] || {})[k]; }));
+    return r;
+  });
+  return rows.length ? csvOf(POST_CSV_COLUMNS, rows) : null;
+}
+function interviewCsvText() {
+  const rows = [];
+  sortedParticipants().filter(p => Object.keys(p.interview).length || Object.keys(p.recognitionAudio || {}).length).forEach(p => {
+    const recogIds = p.assignment.map(a => 'Recog' + a.taskId).filter(q => audioMetaOf(p, q).recorded || audioMetaOf(p, q).skipped);
+    [...recogIds, ...INTERVIEW_IDS].forEach(q => {
+      const m = audioMetaOf(p, q);
+      rows.push({ participantId: p.participantId, questionId: q, recorded: m.recorded ? 1 : 0, skipped: m.skipped ? 1 : 0,
+        durationMs: m.durationMs ?? '', mimeType: m.mimeType || '', storageType: m.storageType || '', audioKey: m.audioKey || '', recordedAt: m.recordedAt || '' });
+    });
+  });
+  return rows.length ? csvOf(INTERVIEW_CSV_COLUMNS, rows) : null;
+}
+function exportReadme(parts, nAudio, s) {
+  const lines = [
+    'MOA 실험 데이터 전체 내보내기',
+    `내보낸 시각: ${new Date().toLocaleString('ko-KR')} (기기 시각)`,
+    `참가자 수: ${sortedParticipants().length}명 / 녹음 파일: ${nAudio}개`,
+    '',
+    '[파일 설명]',
+    `moa_experiment_${s}.csv  과제 결과 (참가자 × 과제 1행)`,
+    `moa_presurvey_${s}.csv   사전설문 + 안내·연습 기록`,
+    `moa_postsurvey_${s}.csv  사후설문 (경고 방식별 평가, 선호)`,
+    `moa_interview_${s}.csv   녹음 기록 (인지 확인·인터뷰, 음성 제외)`,
+    `moa_experiment_backup_${s}.json  전체 백업 (연구자 모드 'JSON 불러오기'로 복원 가능, 음성 제외)`,
+    'recordings/참가번호/      참가자별 녹음 파일 + 질문 목록(참가번호_recordings_list.csv)',
+    '',
+    '시각(…At) 값은 UTC 기준입니다. 한국 시간은 9시간을 더하세요.',
+    `포함된 데이터: ${parts.join(', ')}`,
+  ];
+  return lines.join('\r\n');
+}
+async function rExportAll() {
+  const parts = sortedParticipants();
+  if (!parts.length) { alert('저장된 데이터가 없습니다.'); return; }
+  const s = stamp();
+  const texts = [
+    [`moa_experiment_${s}.csv`, tasksCsvText()], [`moa_presurvey_${s}.csv`, preCsvText()],
+    [`moa_postsurvey_${s}.csv`, postCsvText()], [`moa_interview_${s}.csv`, interviewCsvText()],
+    [`moa_experiment_backup_${s}.json`, JSON.stringify({ ...store, exportedAt: iso() }, null, 2)],
+  ].filter(([, c]) => c);
+  const audio = [];                           // { path, meta }
+  const lists = [];
+  for (const p of parts) {
+    const items = participantRecordings(p);
+    if (!items.length) continue;
+    const pid = p.participantId;
+    items.forEach(it => audio.push({ path: `recordings/${pid}/${recordingFileName(pid, it)}`, meta: it.meta }));
+    lists.push([`recordings/${pid}/${pid}_recordings_list.csv`, '﻿' + recordingsManifestCsv(pid, items)]);
+  }
+  const allTexts = [['README.txt', exportReadme(texts.map(t => t[0]), audio.length, s)], ...texts, ...lists];
+  const zipName = `moa_export_${s}.zip`;
+
+  if (NATIVE_APP) {
+    const cap = await nativeAudioRequest({ type: 'interviewCapabilities' }, 3000);
+    if (!cap.ok || !(cap.features || []).includes('exportAll')) {
+      alert('전체 내보내기를 쓰려면 iPhone 앱(App.js)을 최신 파일로 교체해 주세요.\n그 전까지는 위의 CSV·JSON 버튼과 참가자별 녹음 공유를 이용해 주세요.');
+      return;
+    }
+    const nativeAudio = audio.filter(a => a.meta.storageType === 'native');
+    showToast(`데이터와 녹음 ${nativeAudio.length}개를 묶는 중입니다…`);
+    const r = await nativeAudioRequest({ type: 'interviewExportAll', zipName,
+      textFiles: allTexts.map(([name, content]) => ({ name, content })),
+      files: nativeAudio.map(a => ({ uri: a.meta.nativeUri, name: a.path })) }, 600000);
+    if (!r.ok && r.error !== 'cancelled') alert('전체 내보내기 실패: ' + (r.error || ''));
+    else if (r.ok) showToast(`내보내기 완료: 녹음 ${r.count}개 포함`);
+    return;
+  }
+  try {
+    const enc = new TextEncoder();
+    const entries = allTexts.map(([name, content]) => ({ name, bytes: enc.encode(content) }));
+    for (const a of audio.filter(x => x.meta.storageType !== 'native')) {
+      const rec = await idbGet(a.meta.audioKey);
+      if (rec && rec.blob) entries.push({ name: a.path, bytes: new Uint8Array(await rec.blob.arrayBuffer()) });
+    }
+    const blob = new Blob([buildZip(entries)], { type: 'application/zip' });
+    const url = URL.createObjectURL(blob);
+    const el = document.createElement('a');
+    el.href = url; el.download = zipName;
+    document.body.appendChild(el); el.click(); el.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 15000);
+  } catch (e) { alert('전체 내보내기 실패: ' + e.message); }
 }
 
 /* ─── 20. 이벤트 연결 · 시작 ───────────────────────────────────── */

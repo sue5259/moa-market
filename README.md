@@ -27,6 +27,7 @@
 - 기존 데이터에는 `preSurvey / postSurvey / interview / progress`가 자동 보완됨
 - `completedAt`은 인터뷰 Q4까지 녹음 또는 '답변하지 않기' 후에만 기록
 - 녹음: iPhone 앱 = expo-audio 녹음 → 앱 문서 폴더 `moa-interview/P01_interview_Q01.m4a` / 브라우저 = MediaRecorder → IndexedDB `MOAExperimentAudio.recordings` (키 `P01_Q01`). localStorage에는 녹음 정보(metadata)만 저장
+- 연구자 모드 맨 위 **전체 내보내기**: CSV 4종 + JSON 백업 + 모든 참가자 녹음(`recordings/참가번호/`, 질문 목록 포함) + README.txt를 `moa_export_날짜.zip` 하나로 (iPhone은 새 App.js 필요, 녹음을 하나씩 이어 써서 메모리 절약)
 - 연구자 모드 › 참가자 › **이 참가자 녹음 모두 공유(zip)**: 인지 확인·인터뷰 녹음 전부 + 질문 목록 CSV(`P01_recordings_list.csv`)를 `P01_recordings.zip` 하나로 (iPhone은 새 App.js 필요, 브라우저는 다운로드)
 - 녹음 듣기 버튼: ▶ 들어보기 → ⏸ 일시정지 → ▶ 이어 듣기 (iPhone은 새 App.js 필요)
 - 연구자 모드: 사전설문·사후설문·인터뷰 기록 CSV, 질문별 녹음 재생·공유(다운로드). 참가자 삭제/전체 삭제 시 녹음 파일도 삭제

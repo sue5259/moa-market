@@ -18,6 +18,8 @@
  *   interviewCapabilities                           → interviewCapabilitiesResult { features }
  *   interviewAudioShareAll { participantId, files[{uri,name}], manifestName, manifest, zipName }
  *                                                   → interviewAudioSharedAll (녹음 + 질문 목록 CSV를 zip 하나로 묶어 공유)
+ *   interviewExportAll { zipName, textFiles[{name,content}], files[{uri,name}] }
+ *                                                   → interviewExportedAll (CSV·JSON + 모든 녹음을 zip 하나로, 파일에 차례로 이어 써서 메모리 절약)
  *   녹음 파일: 앱 문서 폴더/moa-interview/P01_interview_Q01.m4a (참가 번호와 질문 번호만 사용)
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -193,6 +195,55 @@ async function writeTempBytes(fileName, bytes) {
   return uri;
 }
 
+// 전체 내보내기: 항목을 하나씩 읽어 zip 파일에 바로 이어 씀 (녹음이 많아도 메모리에 한꺼번에 올리지 않음)
+const SAFE_PATH = /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)*$/;
+function zipHeaders(nameBytes, crc, size, offset, dosTime, dosDate) {
+  const lh = new DataView(new ArrayBuffer(30));
+  lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true);
+  lh.setUint16(10, dosTime, true); lh.setUint16(12, dosDate, true); lh.setUint32(14, crc, true);
+  lh.setUint32(18, size, true); lh.setUint32(22, size, true); lh.setUint16(26, nameBytes.length, true);
+  const ch = new DataView(new ArrayBuffer(46));
+  ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true);
+  ch.setUint16(12, dosTime, true); ch.setUint16(14, dosDate, true); ch.setUint32(16, crc, true);
+  ch.setUint32(20, size, true); ch.setUint32(24, size, true); ch.setUint16(28, nameBytes.length, true); ch.setUint32(42, offset, true);
+  return [new Uint8Array(lh.buffer), new Uint8Array(ch.buffer)];
+}
+async function writeZipStreaming(zipName, sources) {   // sources: [{ name, getBytes: async () => Uint8Array }]
+  const canStream = FileSystem.File && FileSystem.Paths && FileSystem.File.prototype && FileSystem.File.prototype.open;
+  if (!canStream) {
+    const entries = [];
+    for (const src of sources) entries.push({ name: src.name, bytes: await src.getBytes() });
+    return writeTempBytes(zipName, buildZip(entries));
+  }
+  const d = new Date();
+  const dosTime = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const dosDate = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  const zf = new FileSystem.File(FileSystem.Paths.cache, zipName);
+  if (zf.exists) zf.delete();
+  zf.create();
+  const h = zf.open();
+  const central = [];
+  let offset = 0;
+  try {
+    for (const src of sources) {
+      const bytes = await src.getBytes();
+      const name = utf8Bytes(src.name);
+      const [lh, ch] = zipHeaders(name, crc32(bytes), bytes.length, offset, dosTime, dosDate);
+      h.writeBytes(lh); h.writeBytes(name); h.writeBytes(bytes);
+      central.push(ch, name);
+      offset += lh.length + name.length + bytes.length;
+    }
+    let cdSize = 0;
+    for (const b of central) { h.writeBytes(b); cdSize += b.length; }
+    const end = new DataView(new ArrayBuffer(22));
+    const n = central.length / 2;
+    end.setUint32(0, 0x06054b50, true); end.setUint16(8, n, true); end.setUint16(10, n, true);
+    end.setUint32(12, cdSize, true); end.setUint32(16, offset, true);
+    h.writeBytes(new Uint8Array(end.buffer));
+  } finally { h.close(); }
+  return zf.uri;
+}
+
 // 공유용 임시 파일 만들기 (Expo SDK 버전에 따라 파일 API가 달라 둘 다 지원)
 async function writeTempFile(filename, content) {
   if (FileSystem.File && FileSystem.Paths) {
@@ -314,7 +365,7 @@ function Shell() {
       return;
     }
     if (msg.type === 'interviewCapabilities') {
-      done('interviewCapabilitiesResult', { features: ['pause', 'shareAll'] });
+      done('interviewCapabilitiesResult', { features: ['pause', 'shareAll', 'exportAll'] });
       return;
     }
     if (msg.type === 'interviewAudioShareAll') {
@@ -331,6 +382,24 @@ function Shell() {
         await Sharing.shareAsync(zipUri, { mimeType: 'application/zip', UTI: 'public.zip-archive', dialogTitle: zipName });
         done('interviewAudioSharedAll', { count: (msg.files || []).length });
       } catch (e) { fail('interviewAudioSharedAll', e); }
+      return;
+    }
+    if (msg.type === 'interviewExportAll') {
+      try {
+        const sources = [];
+        for (const t of msg.textFiles || []) {
+          if (!SAFE_PATH.test(String(t.name)) || String(t.name).includes('..')) throw new Error('bad_file_name');
+          sources.push({ name: t.name, getBytes: async () => utf8Bytes(String(t.content)) });
+        }
+        for (const f of msg.files || []) {
+          if (!SAFE_PATH.test(String(f.name)) || String(f.name).includes('..')) throw new Error('bad_file_name');
+          sources.push({ name: f.name, getBytes: () => readFileBytes(f.uri) });
+        }
+        const zipName = SAFE_FILE.test(String(msg.zipName)) ? msg.zipName : 'moa_export.zip';
+        const zipUri = await writeZipStreaming(zipName, sources);
+        await Sharing.shareAsync(zipUri, { mimeType: 'application/zip', UTI: 'public.zip-archive', dialogTitle: zipName });
+        done('interviewExportedAll', { count: (msg.files || []).length });
+      } catch (e) { fail('interviewExportedAll', e); }
       return;
     }
     if (msg.type === 'interviewAudioDelete') {

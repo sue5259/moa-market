@@ -460,3 +460,4 @@ body.is-researcher #app { max-width: 1200px; background: #F6F7F9; }
 .recog-hint { color: var(--sub); }
 .recog-audio .btn-row .btn { min-height: 56px; }
 .r-share-all { width: auto; min-height: 44px; font-size: 15px; margin: 4px 0 8px; padding: 6px 14px; }
+.r-actions .r-export-all { background: #0A5246; flex-basis: 100%; min-height: 56px; font-size: 18px; }

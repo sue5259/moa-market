@@ -2237,7 +2237,8 @@ function participantSurveyHTML(p) {
   return `<div class="r-sub"><h3>사전설문</h3>${preHTML}</div>
     <div class="r-sub"><h3>사후설문</h3>${postHTML}</div>
     <div class="r-sub"><h3>안내·연습</h3>${practiceSummaryHTML(p)}</div>
-    <div class="r-sub"><h3>인터뷰 · 인지 확인 녹음</h3>${Object.keys(p.interview).length || recogQs.length
+    <div class="r-sub"><h3>인터뷰 · 인지 확인 녹음</h3>${participantRecordings(p).length
+      ? `<button class="btn btn-secondary r-share-all" data-act="rShareAllAudio" data-id="${p.participantId}">이 참가자 녹음 모두 ${NATIVE_APP ? '공유' : '다운로드'} (${participantRecordings(p).length}개, zip)</button>` : ''}${Object.keys(p.interview).length || recogQs.length
       ? `<div class="table-wrap"><table class="r-table"><thead><tr><th>질문</th><th>상태</th><th>저장</th><th></th></tr></thead><tbody>${ivRows}</tbody></table></div>` : '<p class="r-meta">응답 없음</p>'}</div>`;
 }
 async function rPlayAudio({ id, q }) { await playRecording(id, q); }
@@ -2279,6 +2280,7 @@ const SURVEY_ACTIONS = {
   interviewSkip: actInterviewSkip, interviewNext: actInterviewNext,
   dbgGoPre, dbgFillPre, dbgGoPost, dbgFillPost, dbgGoInterview,
   rPreCsv, rPostCsv, rInterviewCsv, rPlayAudio, rSaveAudio,
+  rShareAllAudio: d => rShareAllAudio(d),
 };
 
 /* ─── 19-B. 실험 안내 · 연습 과제 · 인지 확인 음성 답변 ─────────────── */
@@ -2491,6 +2493,115 @@ const PRACTICE_ACTIONS = {
   studyIntroNext: actStudyIntroNext, practiceStart: actPracticeStart, practiceFinish: actPracticeFinish,
   recogAudioSkip: actRecogAudioSkip,
 };
+
+/* ─── 19-C. 참가자 녹음 모두 공유 (zip 하나로 묶기) ───────────────── */
+// 압축 없이 묶는 zip (녹음 파일은 이미 압축된 형식이라 압축 이득이 거의 없음)
+const ZIP_CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+  return t;
+})();
+function zipCrc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = ZIP_CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function buildZip(entries) {               // entries: [{ name, bytes: Uint8Array }]
+  const enc = new TextEncoder();
+  const d = new Date();
+  const dosTime = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const dosDate = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  const locals = [], centrals = [];
+  let offset = 0;
+  for (const e of entries) {
+    const name = enc.encode(e.name), crc = zipCrc32(e.bytes), size = e.bytes.length;
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); lh.setUint16(8, 0, true);
+    lh.setUint16(10, dosTime, true); lh.setUint16(12, dosDate, true); lh.setUint32(14, crc, true);
+    lh.setUint32(18, size, true); lh.setUint32(22, size, true); lh.setUint16(26, name.length, true); lh.setUint16(28, 0, true);
+    locals.push(new Uint8Array(lh.buffer), name, e.bytes);
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true);
+    ch.setUint16(10, 0, true); ch.setUint16(12, dosTime, true); ch.setUint16(14, dosDate, true); ch.setUint32(16, crc, true);
+    ch.setUint32(20, size, true); ch.setUint32(24, size, true); ch.setUint16(28, name.length, true);
+    ch.setUint32(42, offset, true);
+    centrals.push(new Uint8Array(ch.buffer), name);
+    offset += 30 + name.length + size;
+  }
+  const cdSize = centrals.reduce((s, b) => s + b.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, entries.length, true); end.setUint16(10, entries.length, true);
+  end.setUint32(12, cdSize, true); end.setUint32(16, offset, true);
+  const parts = [...locals, ...centrals, new Uint8Array(end.buffer)];
+  const out = new Uint8Array(parts.reduce((s, b) => s + b.length, 0));
+  let p = 0; for (const b of parts) { out.set(b, p); p += b.length; }
+  return out;
+}
+
+// 참가자의 녹음 목록 (인지 확인 → 인터뷰 순) + 질문 목록 CSV
+function participantRecordings(p) {
+  const list = [];
+  p.assignment.forEach((a, i) => {
+    const q = 'Recog' + a.taskId, m = audioMetaOf(p, q);
+    if (m.recorded) list.push({ qid: q, kind: '인지 확인', order: i + 1, taskId: a.taskId, condition: a.condition,
+      question: `[${TASK_TYPES[a.taskId]}] 이 화면에서 사용자의 선택을 특정 방향으로 유도한다고 느낀 요소가 있었나요? → 어떤 부분이 그렇게 느껴졌나요?`, meta: m });
+  });
+  INTERVIEW_QUESTIONS.forEach(([q, text], i) => {
+    const m = audioMetaOf(p, q);
+    if (m.recorded) list.push({ qid: q, kind: '인터뷰', order: i + 1, taskId: '', condition: '', question: text, meta: m });
+  });
+  return list;
+}
+function recordingFileName(pid, item) {
+  const ext = item.meta.storageType === 'native' ? 'm4a' : extOfMime(item.meta.mimeType);
+  return item.meta.fileName || `${pid}_interview_${item.qid}.${ext}`;
+}
+function recordingsManifestCsv(pid, items) {
+  const cols = ['fileName', 'participantId', 'type', 'questionId', 'taskId', 'condition', 'question', 'durationMs', 'durationText', 'recordedAt'];
+  const rows = items.map(it => ({ fileName: recordingFileName(pid, it), participantId: pid, type: it.kind, questionId: it.qid,
+    taskId: it.taskId, condition: it.condition, question: it.question, durationMs: it.meta.durationMs,
+    durationText: fmtDuration(it.meta.durationMs), recordedAt: it.meta.recordedAt }));
+  return [cols.join(','), ...rows.map(r => cols.map(c => csvCell(r[c])).join(','))].join('\r\n');
+}
+async function rShareAllAudio({ id }) {
+  const p = store.participants[id];
+  if (!p) return;
+  const items = participantRecordings(p);
+  if (!items.length) { alert('이 참가자의 녹음이 없습니다.'); return; }
+  const manifestName = `${id}_recordings_list.csv`;
+  const manifest = recordingsManifestCsv(id, items);
+  const nativeItems = items.filter(it => it.meta.storageType === 'native');
+  const webItems = items.filter(it => it.meta.storageType !== 'native');
+
+  if (NATIVE_APP && nativeItems.length) {
+    const cap = await nativeAudioRequest({ type: 'interviewCapabilities' }, 3000);
+    if (!cap.ok || !(cap.features || []).includes('shareAll')) {
+      alert('녹음 모두 공유를 쓰려면 iPhone 앱(App.js)을 최신 파일로 교체해 주세요.\n그 전까지는 질문별 공유 버튼을 이용해 주세요.');
+      return;
+    }
+    showToast(`녹음 ${nativeItems.length}개를 묶는 중입니다…`);
+    const r = await nativeAudioRequest({ type: 'interviewAudioShareAll', participantId: id, zipName: `${id}_recordings.zip`,
+      files: nativeItems.map(it => ({ uri: it.meta.nativeUri, name: recordingFileName(id, it) })),
+      manifestName, manifest }, 300000);
+    if (!r.ok && r.error !== 'cancelled') alert('공유하지 못했습니다: ' + (r.error || ''));
+    return;
+  }
+  if (!webItems.length) { alert('이 녹음들은 iPhone 실험 앱 안에 저장되어 있습니다. 앱의 연구자 모드에서 공유해 주세요.'); return; }
+  try {
+    const entries = [];
+    for (const it of webItems) {
+      const rec = await idbGet(it.meta.audioKey);
+      if (rec && rec.blob) entries.push({ name: recordingFileName(id, it), bytes: new Uint8Array(await rec.blob.arrayBuffer()) });
+    }
+    entries.push({ name: manifestName, bytes: new TextEncoder().encode('﻿' + manifest) });
+    const blob = new Blob([buildZip(entries)], { type: 'application/zip' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${id}_recordings.zip`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (e) { alert('녹음 묶기 실패: ' + e.message); }
+}
 
 /* ─── 20. 이벤트 연결 · 시작 ───────────────────────────────────── */
 const ACTIONS = {

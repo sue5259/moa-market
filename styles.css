@@ -459,3 +459,4 @@ body.is-researcher #app { max-width: 1200px; background: #F6F7F9; }
 .recog-audio { margin-top: 4px; padding: 16px; border: 1px solid #E4E7EB; border-radius: 14px; background: #fff; }
 .recog-hint { color: var(--sub); }
 .recog-audio .btn-row .btn { min-height: 56px; }
+.r-share-all { width: auto; min-height: 44px; font-size: 15px; margin: 4px 0 8px; padding: 6px 14px; }

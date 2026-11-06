@@ -15,6 +15,9 @@
  *   interviewAudioPause / interviewAudioResume       → interviewAudioPaused / interviewAudioResumed
  *   interviewAudioShare  { uri, fileName }           → interviewAudioShared
  *   interviewAudioDelete { participantId | all }     → interviewAudioDeleted { count }
+ *   interviewCapabilities                           → interviewCapabilitiesResult { features }
+ *   interviewAudioShareAll { participantId, files[{uri,name}], manifestName, manifest, zipName }
+ *                                                   → interviewAudioSharedAll (녹음 + 질문 목록 CSV를 zip 하나로 묶어 공유)
  *   녹음 파일: 앱 문서 폴더/moa-interview/P01_interview_Q01.m4a (참가 번호와 질문 번호만 사용)
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -94,6 +97,100 @@ async function deleteInterviewFiles(prefix) {
     if (!prefix || name.startsWith(prefix)) { await FileSystem.deleteAsync(dir + name, { idempotent: true }); count++; }
   }
   return count;
+}
+
+// ── 참가자 녹음 모두 공유: zip 하나로 묶기 (압축 없이 저장) ──
+const SAFE_FILE = /^[A-Za-z0-9_.-]+$/;
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+function base64ToBytes(b64) {
+  const clean = String(b64).replace(/[^A-Za-z0-9+/]/g, '');
+  const out = new Uint8Array(Math.floor(clean.length * 3 / 4));
+  let buf = 0, bits = 0, j = 0;
+  for (let i = 0; i < clean.length; i++) {
+    buf = (buf << 6) | B64.indexOf(clean[i]); bits += 6;
+    if (bits >= 8) { bits -= 8; out[j++] = (buf >> bits) & 0xFF; }
+  }
+  return out.subarray(0, j);
+}
+function bytesToBase64(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i], b = bytes[i + 1], c = bytes[i + 2];
+    s += B64[a >> 2] + B64[((a & 3) << 4) | ((b ?? 0) >> 4)]
+      + (b === undefined ? '=' : B64[((b & 15) << 2) | ((c ?? 0) >> 6)])
+      + (c === undefined ? '=' : B64[c & 63]);
+  }
+  return s;
+}
+function utf8Bytes(str) {
+  const out = [];
+  for (const ch of str) {
+    let c = ch.codePointAt(0);
+    if (c < 0x80) out.push(c);
+    else if (c < 0x800) out.push(0xC0 | (c >> 6), 0x80 | (c & 63));
+    else if (c < 0x10000) out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    else out.push(0xF0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+  }
+  return new Uint8Array(out);
+}
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function buildZip(entries) {
+  const d = new Date();
+  const dosTime = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const dosDate = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  const parts = [], central = [];
+  let offset = 0;
+  for (const e of entries) {
+    const name = utf8Bytes(e.name), crc = crc32(e.bytes), size = e.bytes.length;
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true);
+    lh.setUint16(10, dosTime, true); lh.setUint16(12, dosDate, true); lh.setUint32(14, crc, true);
+    lh.setUint32(18, size, true); lh.setUint32(22, size, true); lh.setUint16(26, name.length, true);
+    parts.push(new Uint8Array(lh.buffer), name, e.bytes);
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true);
+    ch.setUint16(12, dosTime, true); ch.setUint16(14, dosDate, true); ch.setUint32(16, crc, true);
+    ch.setUint32(20, size, true); ch.setUint32(24, size, true); ch.setUint16(28, name.length, true); ch.setUint32(42, offset, true);
+    central.push(new Uint8Array(ch.buffer), name);
+    offset += 30 + name.length + size;
+  }
+  const cdSize = central.reduce((n, b) => n + b.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, entries.length, true); end.setUint16(10, entries.length, true);
+  end.setUint32(12, cdSize, true); end.setUint32(16, offset, true);
+  const all = [...parts, ...central, new Uint8Array(end.buffer)];
+  const out = new Uint8Array(all.reduce((n, b) => n + b.length, 0));
+  let p = 0; for (const b of all) { out.set(b, p); p += b.length; }
+  return out;
+}
+async function readFileBytes(uri) {
+  if (FileSystem.File && FileSystem.Paths) {
+    const f = new FileSystem.File(uri);
+    if (f.bytes) return await f.bytes();
+    return base64ToBytes(f.base64Sync ? f.base64Sync() : await f.base64());
+  }
+  return base64ToBytes(await FileSystem.readAsStringAsync(uri, { encoding: 'base64' }));
+}
+async function writeTempBytes(fileName, bytes) {
+  if (FileSystem.File && FileSystem.Paths) {
+    const f = new FileSystem.File(FileSystem.Paths.cache, fileName);
+    if (f.exists) f.delete();
+    f.create();
+    f.write(bytes);
+    return f.uri;
+  }
+  const uri = FileSystem.cacheDirectory + fileName;
+  await FileSystem.writeAsStringAsync(uri, bytesToBase64(bytes), { encoding: 'base64' });
+  return uri;
 }
 
 // 공유용 임시 파일 만들기 (Expo SDK 버전에 따라 파일 API가 달라 둘 다 지원)
@@ -214,6 +311,26 @@ function Shell() {
         await Sharing.shareAsync(msg.uri, { mimeType: 'audio/mp4', UTI: 'com.apple.m4a-audio', dialogTitle: msg.fileName || 'interview.m4a' });
         done('interviewAudioShared');
       } catch (e) { fail('interviewAudioShared', e); }
+      return;
+    }
+    if (msg.type === 'interviewCapabilities') {
+      done('interviewCapabilitiesResult', { features: ['pause', 'shareAll'] });
+      return;
+    }
+    if (msg.type === 'interviewAudioShareAll') {
+      try {
+        if (!SAFE_ID.test(pid)) throw new Error('bad_id');
+        const entries = [];
+        for (const f of msg.files || []) {
+          if (!SAFE_FILE.test(String(f.name))) throw new Error('bad_file_name');
+          entries.push({ name: f.name, bytes: await readFileBytes(f.uri) });
+        }
+        if (msg.manifest && SAFE_FILE.test(String(msg.manifestName))) entries.push({ name: msg.manifestName, bytes: utf8Bytes('\uFEFF' + msg.manifest) });
+        const zipName = SAFE_FILE.test(String(msg.zipName)) ? msg.zipName : `${pid}_recordings.zip`;
+        const zipUri = await writeTempBytes(zipName, buildZip(entries));
+        await Sharing.shareAsync(zipUri, { mimeType: 'application/zip', UTI: 'public.zip-archive', dialogTitle: zipName });
+        done('interviewAudioSharedAll', { count: (msg.files || []).length });
+      } catch (e) { fail('interviewAudioSharedAll', e); }
       return;
     }
     if (msg.type === 'interviewAudioDelete') {

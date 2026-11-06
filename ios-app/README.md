@@ -70,3 +70,4 @@ Mac이 "들어오는 네트워크 연결을 허용할까요?"라고 물으면 **
 - 녹음 듣기 중 **일시정지/이어 듣기**는 11월 4일 이후 App.js가 필요합니다 (`grep -c interviewAudioPause ~/moa-app/App.js` 결과가 1 이상이면 최신)
 - 연구자 모드의 **이 참가자 녹음 모두 공유**(zip)는 11월 6일 이후 App.js가 필요합니다 (`grep -c interviewAudioShareAll ~/moa-app/App.js` 결과가 1 이상이면 최신)
 - 연구자 모드의 **전체 내보내기**(CSV·JSON·녹음 zip)도 11월 6일 이후 App.js가 필요합니다 (`grep -c interviewExportAll ~/moa-app/App.js` 결과가 1 이상이면 최신)
+- 11월 6일 오후에 받은 전체 내보내기 zip이 "열 수 없음"으로 나오면 App.js를 다시 교체하세요. zip 끝부분이 잘리던 문제를 고친 버전입니다 (`grep -c concatBytes ~/moa-app/App.js` 결과가 1 이상이면 최신). 이미 받은 잘린 zip 안의 데이터는 복구할 수 있습니다.

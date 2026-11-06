@@ -221,27 +221,45 @@ async function writeZipStreaming(zipName, sources) {   // sources: [{ name, getB
   const zf = new FileSystem.File(FileSystem.Paths.cache, zipName);
   if (zf.exists) zf.delete();
   zf.create();
-  const h = zf.open();
   const central = [];
   let offset = 0;
+  let h = zf.open();
   try {
     for (const src of sources) {
       const bytes = await src.getBytes();
       const name = utf8Bytes(src.name);
       const [lh, ch] = zipHeaders(name, crc32(bytes), bytes.length, offset, dosTime, dosDate);
-      h.writeBytes(lh); h.writeBytes(name); h.writeBytes(bytes);
+      h.writeBytes(concatBytes([lh, name]));
+      h.writeBytes(bytes);
       central.push(ch, name);
       offset += lh.length + name.length + bytes.length;
     }
-    let cdSize = 0;
-    for (const b of central) { h.writeBytes(b); cdSize += b.length; }
-    const end = new DataView(new ArrayBuffer(22));
-    const n = central.length / 2;
-    end.setUint32(0, 0x06054b50, true); end.setUint16(8, n, true); end.setUint16(10, n, true);
-    end.setUint32(12, cdSize, true); end.setUint32(16, offset, true);
-    h.writeBytes(new Uint8Array(end.buffer));
   } finally { h.close(); }
-  return zf.uri;
+  // 끝부분(목차)은 한 덩어리로 쓰고, 파일 크기를 확인해 모자라면 다시 씀 (11/6 목차 일부 누락 대응)
+  const cdSize = central.reduce((s, b) => s + b.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  const n = central.length / 2;
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, n, true); end.setUint16(10, n, true);
+  end.setUint32(12, cdSize, true); end.setUint32(16, offset, true);
+  const tail = concatBytes([...central, new Uint8Array(end.buffer)]);
+  const expected = offset + tail.length;
+  const fileSize = () => { try { return new FileSystem.File(zf.uri).size; } catch (e) { return -1; } };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    h = zf.open();
+    try { h.offset = offset; h.writeBytes(tail); } finally { h.close(); }
+    await new Promise(r => setTimeout(r, 150));
+    if (fileSize() === expected) return zf.uri;
+  }
+  // 그래도 크기가 맞지 않으면 메모리에서 한 번에 만듦
+  const entries = [];
+  for (const src of sources) entries.push({ name: src.name, bytes: await src.getBytes() });
+  return writeTempBytes(zipName, buildZip(entries));
+}
+function concatBytes(parts) {
+  const out = new Uint8Array(parts.reduce((s, p) => s + p.length, 0));
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
 }
 
 // 공유용 임시 파일 만들기 (Expo SDK 버전에 따라 파일 API가 달라 둘 다 지원)
